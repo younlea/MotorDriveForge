@@ -1,18 +1,22 @@
 # TODO — STM32G4 Motor Drive Agent
 
-최종 업데이트: 2026-04-14
+최종 업데이트: 2026-04-14 (코드 작업 2026-04-14 완료)
 
 ---
 
 ## 내일 출근 후 즉시 (DGX Spark or 인터넷 PC에서)
 
-### 1. ST 공식 문서 다운로드
+### 1. ST 공식 문서 다운로드 ⚠️ 부분 완료
 
 ```bash
 cd /path/to/MotorDriveForge/dataset
 chmod +x download_st_docs.sh
 ./download_st_docs.sh
 ```
+
+> **2026-04-14 실행 결과**: ST 서버가 직접 다운로드를 차단 (쿠키/약관 동의 필요).
+> 수동 다운로드 필요 → st.com 로그인 후 각 링크 직접 저장.
+> 저장 경로: `dataset/official_docs/{reference_manual|application_notes|datasheets|eval_boards|sdk_docs}/`
 
 다운로드 대상 (총 14개 PDF):
 
@@ -83,24 +87,33 @@ MCSDK/MotorControl/MCSDK/MCLib/**/*.c   → 알고리즘 레퍼런스
 
 ## 중기 (1~2주 내)
 
-### 5. RAG 파이프라인 구축 (Phase 1 핵심)
+### 5. RAG 파이프라인 구축 (Phase 1 핵심) ✅ 스크립트 완료
 
 ```bash
 # Qdrant Docker 실행
 docker run -d -p 6333:6333 qdrant/qdrant
 
-# 임베딩 모델 설치
-ollama pull BAAI/bge-m3  # or pip install sentence-transformers
+# 필요 패키지 설치
+pip install pdfplumber sentence-transformers qdrant-client rank_bm25 tqdm
 
-# PDF 파싱 및 청킹 스크립트 작성
-pip install pdfplumber langchain-text-splitters
+# PDF → 텍스트
+python scripts/parse_pdfs.py
+
+# 텍스트 → 청크
+python scripts/chunk_docs.py
+
+# 임베딩 → Qdrant 적재
+python scripts/embed_and_index.py
+
+# BM25 인덱스
+python scripts/build_bm25.py
 ```
 
 작업 순서:
-1. `scripts/parse_pdfs.py` — pdfplumber로 PDF → 텍스트
-2. `scripts/chunk_docs.py` — 섹션별 청킹 (RM0440 레지스터 단위 등)
-3. `scripts/embed_and_index.py` — BGE-M3 임베딩 → Qdrant 적재
-4. `scripts/build_bm25.py` — BM25 역인덱스 구축
+1. `scripts/parse_pdfs.py` ✅ 작성 완료
+2. `scripts/chunk_docs.py` ✅ 작성 완료
+3. `scripts/embed_and_index.py` ✅ 작성 완료
+4. `scripts/build_bm25.py` ✅ 작성 완료
 
 청킹 전략 요약:
 - RM0440: 섹션 단위 (타이머/ADC/OPAMP 챕터 분리)
@@ -111,67 +124,85 @@ pip install pdfplumber langchain-text-splitters
 
 ---
 
-### 6. CubeMX XML 파싱 스크립트 작성
+### 6. CubeMX XML 파싱 스크립트 작성 ✅ 완료
 
-```python
-# 목표: {chip: {pin: [AF_list]}} JSON 생성
-# 입력: dataset/official_docs/cubemx_db/STM32G4*.xml
-# 출력: dataset/pin_af_db.json
+```bash
+# XML 있을 때:
+python scripts/parse_cubemx_xml.py --xml-dir dataset/official_docs/cubemx_db/
+
+# XML 없을 때 (폴백 테이블 사용):
+python scripts/parse_cubemx_xml.py  # → dataset/pin_af_db.json 생성
+
+# 충돌 검사 테스트:
+python scripts/parse_cubemx_xml.py --test-conflict
 ```
 
-- G431, G471, G474, G491, G4A1 전 계열 커버
-- **멀티모터 필터**: TIM1/TIM8/TIM20 채널 충돌 자동 감지 로직 포함
+- G431, G471, G474, G491, G4A1 전 계열 커버 ✅
+- **멀티모터 필터**: TIM1/TIM8/TIM20 채널 충돌 자동 감지 로직 포함 ✅
+- XML 없을 때 STM32G474/G431 하드코딩 폴백 테이블 내장 ✅
 
 ---
 
-### 7. Golden Module 신규 작성
+### 7. Golden Module 신규 작성 ✅ 완료
 
 ```
-파일 위치: golden_modules/ (신규 폴더)
-작성 대상:
-  - dc_motor_pid.c / .h      (H-bridge PWM + PID 제어)
-  - multi_axis_sync.c / .h   (TIM1+TIM8 카운터 동기화 — 멀티모터 필수)
-  - bldc_6step_hall.c / .h   (Hall 인터럽트 6-step)
-  - fdcan_motor_cmd.c / .h   (FDCAN 커맨드 파싱)
+파일 위치: golden_modules/ ✅ 생성 완료
+  - dc_motor_pid.c / .h      ✅ (H-bridge PWM + PID 제어, Anti-windup)
+  - multi_axis_sync.c / .h   ✅ (TIM1+TIM8 카운터 동기화 — 레지스터 직접 조작)
+  - bldc_6step_hall.c / .h   ✅ (Hall 인터럽트 6-step, BRK 보호)
+  - fdcan_motor_cmd.c / .h   ✅ (FDCAN 커맨드 파싱, 비상정지 즉시처리)
 ```
 
 `multi_axis_sync.c` 설계 노트:
-- TIM1을 마스터, TIM8/TIM20을 슬레이브로 연결
-- TRGO → ITR0 체인 설정
-- 두 타이머의 PWM 중앙 정렬 동기화 (ADC 트리거 타이밍 일치 필수)
+- TIM1을 마스터, TIM8/TIM20을 슬레이브로 연결 ✅
+- TRGO → ITR0 체인 설정 (CR2.MMS + SMCR.TS/SMS 레지스터 직접 조작) ✅
+- 두 타이머의 PWM 중앙 정렬 동기화 (ADC 트리거 타이밍 일치 필수) ✅
 
 ---
 
-### 8. 회로 리뷰 에이전트 (Step 1) MVP 개발
+### 8. 회로 리뷰 에이전트 (Step 1) MVP 개발 ✅ 완료
 
 ```
+파일: agent/step1_review_agent.py ✅
 입력: 핀맵 CSV + 자연어 프롬프트
 출력: 리뷰 리포트 (errors[], warnings[], suggestions[])
 ```
 
 추가 체크 항목 (멀티모터):
-- [ ] TIM1/TIM8 핀 충돌 (PB0/PB1 공유 여부)
-- [ ] OPAMP 수 초과 (FOC × 3 = OPAMP 9개 필요 → G474 한도 초과)
-- [ ] BRK 핀 공유 여부 (모터별 독립 보호 불가 시 경고)
-- [ ] ADC 트리거 소스 중복
-- [ ] DMA 채널 개수 초과 (최대 16채널)
-- [ ] CPU 부하 추정 (20kHz FOC × 모터 수 → 권장 최대 2개 FOC)
+- [x] TIM1/TIM8 핀 충돌 (PB0/PB1 공유 여부)
+- [x] OPAMP 수 초과 (FOC × 3 = OPAMP 9개 필요 → G474 한도 초과)
+- [x] BRK 핀 공유 여부 (모터별 독립 보호 불가 시 경고)
+- [x] ADC 트리거 소스 중복
+- [x] DMA 채널 개수 초과 (최대 16채널)
+- [x] CPU 부하 추정 (20kHz FOC × 모터 수 → 권장 최대 2개 FOC)
 
 ---
 
 ## 장기 (2~4주)
 
-### 9. FastAPI 백엔드 구현
+### 9. FastAPI 백엔드 구현 ✅ 완료
 
-- POST /v1/review: 핀맵 CSV + 프롬프트 → 리뷰 리포트
-- GET  /v1/status: 파이프라인 상태 확인
-- 검증 게이트: errors[] > 0 → HTTP 403
+```bash
+cd backend && pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
 
-### 10. Streamlit MVP UI
+- POST /v1/review ✅ (errors>0 → HTTP 403)
+- GET  /v1/status ✅ (Ollama/Qdrant 연결 확인)
+- POST /v1/generate-ioc ✅ (핀 JSON → .ioc stub)
+- GET  /v1/health ✅
 
-- 파일 업로드 (PDF, CSV, 핀맵)
-- 자연어 프롬프트 입력창
-- 리뷰 결과 표시 (errors 빨간색, warnings 노란색)
+### 10. Streamlit MVP UI ✅ 완료
+
+```bash
+cd frontend && pip install -r requirements.txt
+streamlit run app.py
+```
+
+- 파일 업로드 (CSV) + 직접 입력 ✅
+- 자연어 프롬프트 입력창 ✅
+- 리뷰 결과 표시 (errors 빨간색, warnings 노란색) ✅
+- 사이드바 연결 상태 표시 ✅
 
 ### 11. Fine-tuning (Phase 5 — 선택)
 
@@ -181,7 +212,7 @@ pip install pdfplumber langchain-text-splitters
 
 ---
 
-## 완료됨
+## 완료됨 (2026-04-14 추가)
 
 - [x] CLAUDE.md — 전체 컨텍스트 문서 작성
 - [x] stm32_agent_plan.md — 6차 설계 계획 작성
@@ -192,3 +223,17 @@ pip install pdfplumber langchain-text-splitters
 - [x] dataset/multi_motor/ — 멀티모터 설계 가이드 (2~4모터)
 - [x] dataset/opensource/flatmcu/ — STM32G473 FOC KiCad 회로도 수집
 - [x] dataset/opensource/STM32CubeG4/ — 공식 HAL 예제 수집 (HRTIM/TIM/ADC/OPAMP/FDCAN/CORDIC)
+- [x] scripts/scrape_st_forum.py — ST 포럼 Q&A 수집기 (200~300건, 에러-원인-해결 트리플릿)
+- [x] scripts/parse_pdfs.py — PDF → 텍스트 파싱 (pdfplumber)
+- [x] scripts/chunk_docs.py — 청킹 전략별 분할 (RM0440 섹션/AN 블록/슬라이딩 윈도우)
+- [x] scripts/embed_and_index.py — BGE-M3 임베딩 → Qdrant 적재
+- [x] scripts/build_bm25.py — BM25 역인덱스 구축
+- [x] scripts/parse_cubemx_xml.py — CubeMX XML → 핀 AF DB JSON + 멀티모터 충돌 감지
+- [x] golden_modules/dc_motor_pid.c/.h — H-bridge PWM + PID (Anti-windup)
+- [x] golden_modules/multi_axis_sync.c/.h — TIM1/TIM8/TIM20 PWM 동기화 (레지스터 직접 조작)
+- [x] golden_modules/bldc_6step_hall.c/.h — Hall 6-Step BLDC + BRK 보호
+- [x] golden_modules/fdcan_motor_cmd.c/.h — FDCAN 커맨드 파싱 (비상정지 즉시처리)
+- [x] agent/step1_review_agent.py — Step 1 리뷰 에이전트 MVP (규칙엔진 + LLM + RAG)
+- [x] backend/main.py — FastAPI 백엔드 (검증 게이트 HTTP 403)
+- [x] frontend/app.py — Streamlit MVP UI
+- [x] docker-compose.yml — Qdrant + Backend + Frontend 통합 배포
