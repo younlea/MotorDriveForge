@@ -18,39 +18,39 @@
 
 ---
 
-## 2. 수집해야 하는 데이터 가이드
+## 2. 수집해야 하는 데이터 가이드 (디렉토리 구조 기반)
 
-이러한 에이전트를 만들기 위해 수집할 데이터는 크게 **자동화 가능 데이터**와 **수동 수집 필수 데이터**로 나뉩니다.
+향후 모델 학습 시 데이터의 출처를 쉽게 추적할 수 있도록, 디렉토리 구조에 맞추어 수집 방식(자동/수동/Git)을 체계적으로 분류했습니다.
 
-### A. 자동 수집 가능 데이터 (스크립트로 처리가능)
-초기 핀의 기능적 스펙을 알려줄 기본 DB입니다.
-- **STM32G4 핀별 Alternate Function 매핑 DB**: 
-  - (방법) ST가 제공하는 STM32CubeMX 프로그램 내의 XML DB 파일을 스크립트로 파싱하거나 Github 등에서 오픈소스로 정리된 JSON을 긁어올 수 있습니다. (기 구현된 `parse_cubemx_xml.py` 활용 예정)
+```text
+dataset/
+├── official_docs/   (📌 수동 다운로드 - ST 캡차 정책 우회용)
+│   ├── 하드웨어_데이터시트_및_가이드/ (RM0440, Datasheet, AN5031)
+│   ├── 아날로그_통신_특화/ (AN5306, AN5346, AN5348, AN3070)
+│   └── 모터구동_FOC_특화/ (UM2392, AN5166, EVSPIN32G4-DUAL 회로도)
+├── forum_qa/        (📌 스크립트 자동/수동 기록)
+│   └── st_forum_qa.jsonl (ST 포럼 질의응답 및 에러 사례 스크래핑 결과)
+└── opensource/      (📌 자동 Git Clone 완료 - 완벽한 정답 레퍼런스)
+    ├── Arduino-FOC/ (STM32G4 포팅된 SimpleFOC 소스)
+    ├── flatmcu/     (STM32G473CB 기반 완전 공개 FOC 장비 KiCad 회로도)
+    └── stm32-esc/   (B-G431B-ESC1 펌웨어 최적화 코드)
+```
 
-### B. 수동 수집 필수 데이터 (직접 다운로드 필요 - **URL 가이드**)
-방화벽 및 로그인 캡차로 인해 스크립트로 다운로드할 수 없는 핵심 데이터입니다. 아래 주소에서 직접 다운로드하여 서버 안의 `dataset/official_docs/` 또는 관련 폴더에 배치해 주셔야 합니다.
+### [📁 dataset/official_docs/] (수동 다운로드 필요)
+ST 홈페이지의 방화벽(HTTP/2 셧다운)을 피해, 로컬 PC 브라우저에서 아래 링크들을 클릭해 수동으로 다운로드하고 폴더에 정리합니다.
+- **하드웨어 기초**: [RM0440](https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) / [G474 Datasheet](https://www.st.com/resource/en/datasheet/stm32g474re.pdf) / [AN5031(HW가이드)](https://www.st.com/resource/en/application_note/dm00445657-getting-started-with-stm32g4-series-hardware-development-stmicroelectronics.pdf)
+- **아날로그 / 통신 (모터 핵심)**: [AN5306(OPAMP)](https://www.st.com/resource/en/application_note/dm00609340-operational-amplifier-opamp-usage-in-stm32g4-series-stmicroelectronics.pdf) / [AN5346(ADC)](https://www.st.com/resource/en/application_note/dm00612662-stm32g4-adc-use-tips-and-recommendations-stmicroelectronics.pdf) / [AN5348(FDCAN)](https://www.st.com/resource/en/application_note/dm00627714-introduction-to-fdcan-peripherals-for-stm32-mcus-stmicroelectronics.pdf) / [AN3070(RS485)](https://www.st.com/resource/en/application_note/cd00259695-managing-the-driver-enable-signal-for-rs485-and-iolink-communications-with-the-stm32-usart-stmicroelectronics.pdf)
+- **FOC 제어 / 레퍼런스**: [UM2392(FOC제어루프)](https://www.st.com/resource/en/user_manual/um2392-stm32-motor-control-sdk-v5x-tools-stmicroelectronics.pdf) / [AN5166(전력/MTPA튜닝)](https://www.st.com/resource/en/application_note/dm00481232-guidelines-for-control-and-customization-of-power-boards-with-stm32-mc-sdk-stmicroelectronics.pdf) / [EVSPIN32G4 다축 회로도](https://www.st.com/en/evaluation-tools/evspin32g4-dual.html#cad-resources)
 
-**1. 하드웨어 설계 가이드라인 및 매뉴얼 (PDF)**
-가장 기본적인 필수 회로(전원/클럭)부터 모터 제어용 아날로그(ADC/OPAMP) 핀 구성의 정답지가 되는 문서들입니다.
-- **AN5031 (HW 기초 설계 가이드)**: [링크](https://www.st.com/resource/en/application_note/dm00445657-getting-started-with-stm32g4-series-hardware-development-stmicroelectronics.pdf) - VDD, VCAP, BOOT0, NRST 필수 회로 구성.
-- **AN5306 (OPAMP 사용 가이드)**: [링크](https://www.st.com/resource/en/application_note/dm00609340-operational-amplifier-opamp-usage-in-stm32g4-series-stmicroelectronics.pdf) - 모터 백터 제어(FOC)의 전류 센싱을 위한 내장 OPAMP 핀 내부 라우팅 및 PGA 세팅 규정. **[모터 제어 아날로그 특화]**
-- **AN5346 (ADC 최적화 가이드)**: [링크](https://www.st.com/resource/en/application_note/dm00612662-stm32g4-adc-use-tips-and-recommendations-stmicroelectronics.pdf) - 저전압/고속 모터 전류 샘플링 시 충돌 없는 ADC 채널 할당 규칙. **[모터 제어 아날로그 특화]**
-- **AN5348 (FDCAN 사용 가이드)**: [링크](https://www.st.com/resource/en/application_note/dm00627714-introduction-to-fdcan-peripherals-for-stm32-mcus-stmicroelectronics.pdf) - 다축 모터 간 동기화에 쓰이는 고속 CAN(FDCAN) 결선 주의사항. **[통신 특화]**
-- **AN3070 (RS-485 하드웨어 제어 가이드)**: [링크](https://www.st.com/resource/en/application_note/cd00259695-managing-the-driver-enable-signal-for-rs485-and-iolink-communications-with-the-stm32-usart-stmicroelectronics.pdf) - RS-485 반이중(Half-Duplex) 통신 시 필수적인 UART Driver Enable(DE) 핀의 하드웨어 자동 제어 설정법. **[통신 특화]**
-- **RM0440 (Data Reference Manual)**: [링크](https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) - 페리페럴 동작 원리 및 핀 매핑.
-- **STM32G474 Datasheet**: [링크](https://www.st.com/resource/en/datasheet/stm32g474re.pdf) - 핀별 Alternate Function(AF) 테이블 상세.
+### [📁 dataset/forum_qa/] (자동 스크립트 기반/수동 대체)
+- `scripts/scrape_st_forum.py` 커스텀 스크립트를 통해 에러 실패 사례를 JSONL(`st_forum_qa.jsonl`) 형식으로 자동 구축합니다. 
+- (※ ST 커뮤니티 구조 변경으로 IP가 차단될 경우, 크롬 브라우저에서 찾은 에러 사례를 텍스트 파일로 해당 폴더에 수동으로 저장하여 보강합니다.)
 
-**2. 다축 모터 및 센서 제어 레퍼런스 회로도 (PDF / Schematic)**
-사내 전문가가 없는 대신, 업계에서 검증된 모터 제어 보드 회로도를 지식베이스(답안지)로 삼습니다.
-- **EVSPIN32G4 (통합 모터 드라이버 시스템)**: [자료 탭 이동](https://www.st.com/en/motor-control-ics/stspin32g4.html#documentation) - G4 MCU와 3상 게이트 드라이버가 통합된 칩보드의 회로도로, 가장 완벽한 형태의 모터 레퍼런스를 제공.
-- **EVSPIN32G4-DUAL (2축 BLDC 구동 로직)**: [링크](https://www.st.com/en/evaluation-tools/evspin32g4-dual.html#cad-resources) - 다축 상보 PWM(Dual Timer) 구조 참고용.
-- **B-G431B-ESC1 (단일 축 드론 ESC)**: [링크](https://www.st.com/en/evaluation-tools/b-g431b-esc1.html#cad-resources) - 홀센서 및 엔코더 핀 사용 예.
-- **ST 커뮤니티 포럼 Q&A**: `https://community.st.com/s/topic/0TO0X000000y2OzWAI/motor-control-hardware` - 이 부분은 개인 PC에서 기 구축된 `scripts/scrape_st_forum.py`로 질문/오류 텍스트 데이터를 긁어와야 합니다.
-
-**3. 모터 제어 알고리즘 (FOC: 위치/속도/전류/토크 제어) 가이드 (PDF)**
-제어 목적에 따른 PID 제어 루프 구성 및 센서리스/센서드 모터 파라미터 매칭에 대한 ST 공식 펌웨어 및 수학적 구현 가이드입니다.
-- **UM2392 (STM32 Motor Control SDK 가이드)**: [링크](https://www.st.com/resource/en/user_manual/um2392-stm32-motor-control-sdk-v5x-tools-stmicroelectronics.pdf) - 가장 밑단의 **전류 제어(Current Control)**부터 상단의 **속도(Speed)/위치(Position) 제어** 루프 구조와 튜닝 파라미터를 정리한 통합 매뉴얼.
-- **AN5166 (전력 보드 제어 가이드)**: [링크](https://www.st.com/resource/en/application_note/dm00481232-guidelines-for-control-and-customization-of-power-boards-with-stm32-mc-sdk-stmicroelectronics.pdf) - 모터의 **힘(Torque)** 제어 및 최대 효율(MTPA) 제어를 위해 하드웨어 전력단과 제어 파라미터를 일치시키는 방법을 서술한 지침서.
+### [📁 dataset/opensource/] (자동 Git Clone 완료 ✅)
+단순한 문서를 넘어, 실제 컴파일 시 작동이 보증된 "정답지" 소스코드와 회로도 네트리스트가 포진된 결정적 디렉토리입니다. 로컬 Git Submodule로 이미 다운로드 연동이 완료되었습니다.
+- **[Arduino-FOC]**: 다양한 환경에 포팅 가능한 STM32G4 핀 할당의 가장 범용적인 지침을 제공.
+- **[flatmcu]**: STM32G473CB 기반 완전 공개 모델. 하드웨어 네트리스트 검증을 위해 KiCad 데이터를 파인튜닝 데이터로 변환하여 주입.
+- **[stm32-esc]**: B-G431B-ESC1 보드 맞춤형 최적화 로직 및 주변 레지스터 세팅 추출용 데이터.
 
 ---
 
