@@ -2138,6 +2138,6 @@ for i, (phase, tasks, color, bg) in enumerate(dev_phases):
         add_text(s, f"• {task}", 7.88, ty+0.06+j*0.3, 5.0, 0.28, size=11.5, color=BLACK)
 
 # ── 저장 ───────────────────────────────────────────────────
-output_path = r"C:\Users\usejen_id\Downloads\project\STM32G4_Agent_Plan.pptx"
+output_path = "/home/younlea/source-code/MotorDriveForge/STM32G4_Agent_Plan.pptx"
 prs.save(output_path)
 print(f"PPT 생성 완료: {output_path}")
