@@ -1,7 +1,7 @@
 # Step 1-3: Base LLM QLoRA Fine-tuning Workflow
 
 ## 개요
-RAG의 결과물과 프롬프트를 취합해 "특정 JSON 구조"로만 답변을 반환하도록 Base 모델(Qwen2.5-72B/32B)을 4-bit 환경에서 도메인 튜닝(Fine-Tuning) 합니다.
+RAG의 결과물과 프롬프트를 취합해 "특정 JSON 구조"로만 답변을 반환하도록 Base 모델(Gemma-4-31B/32B)을 4-bit 환경에서 도메인 튜닝(Fine-Tuning) 합니다.
 
 ## 진행 절차
 1. **JSONL 학습 데이터 조립**

@@ -439,11 +439,11 @@ with tab3:
         "알고리즘 통합 실행 (준비 중)",
         disabled=True,
         key="btn_integrate",
-        help="Step 3 통합 기능은 구현 예정입니다. (Qwen2.5-Coder-32B + Golden Module RAG)",
+        help="Step 3 통합 기능은 구현 예정입니다. (Gemma-4-31B + Golden Module RAG)",
     ):
         pass
 
     st.info(
-        "Step 3는 Qwen2.5-Coder-32B-Instruct (Q8, ~32GB) 모델과 Golden Module RAG를 사용하여 "
+        "Step 3는 Gemma-4-31B-It (Q8, ~32GB) 모델과 Golden Module RAG를 사용하여 "
         "USER CODE BEGIN/END 영역에 FOC 알고리즘을 자동 삽입합니다. (구현 예정)"
     )

@@ -108,7 +108,7 @@ bldc_6step.c	6-step 전환 (Hall 기반)	—	신규 작성 필요
 │   "STM32G474, BLDC FOC,                                             │
 │    엔코더, FDCAN, SPI EEPROM"              ↓                         │
 │          ↓ LLM 파싱                                                  │
-│   {chip, motors[], peripherals[],    [검증 LLM : Qwen2.5-72B]       │
+│   {chip, motors[], peripherals[],    [검증 LLM : Gemma-4-31B]       │
 │    communication[], sensors[]}               ↓                      │
 │                                  [검증 리포트 + 확정된 핀 연결 JSON]  │
 └──────────────────────────┬──────────────────────────────────────────┘
@@ -148,7 +148,7 @@ bldc_6step.c	6-step 전환 (Hall 기반)	—	신규 작성 필요
 │  [Golden Module RAG]  ← 기존 FOC/전류제어 코드 + 신규 모듈           │
 │   요구사항에 맞는 모듈 검색·선택                                     │
 │          ↓                                                          │
-│  [통합 LLM : Qwen2.5-Coder-32B]                                     │
+│  [통합 LLM : Gemma-4-31B]                                     │
 │   - 선택된 모듈을 CubeMX 코드에 삽입할 위치 결정                     │
 │   - 인터럽트 핸들러 / 메인 루프 연결 코드 작성                       │
 │   - 모듈 간 데이터 흐름 (전류값 → FOC → PWM) 연결                   │
@@ -194,7 +194,7 @@ PWM/인버터	"3상 6채널 PWM, 데드타임 500ns, 내부 OPAMP 전류 감지"
 LLM 처리 흐름 (Step 1 내부)
 
 자연어 프롬프트
-      ↓ (Qwen2.5-72B 파싱)
+      ↓ (Gemma-4-31B 파싱)
 {chip, clock, motors[], feedback[], pwm, communication[], external[]}
       ↓
 핀맵 CSV + 구조화된 요구사항 → 규칙 엔진 + RAG 검증
@@ -208,11 +208,11 @@ Alternate Function 호환성 (e.g., PA9 → USART1_TX ✓ / USART2_TX ✗)
 전원 핀 누락 (VDD, VDDA, VSS)
 클럭 소스 설정 일관성 (HSE / HSI / LSE)
 요구사항 미충족 핀 누락 (e.g., FDCAN 요구했는데 핀맵에 없음)
-사용 모델: Qwen2.5-72B-Instruct (Q4_K_M, ~40GB)
+사용 모델: Gemma-4-31B-It (Q4_K_M, ~40GB)
 
 선택 이유:
 - 128GB 통합 메모리 → 7B 쓸 이유 없음, 72B 여유롭게 실행
-- Qwen2.5-72B: 한국어 자연어 파싱 + 기술 추론 모두 최상급
+- Gemma-4-31B: 한국어 자연어 파싱 + 기술 추론 모두 최상급
 - 자연어 → 구조화 JSON 변환, 핀 제약 조건 추론 모두 우수
 - 차선: LLaMA 3.1 70B (한국어 약간 약하지만 범용성 좋음)
 
@@ -299,7 +299,7 @@ LLM이 실제로 하는 일 (범위 명확히 제한)
   ❌ HAL_TIM_PWM_Init 등 HAL 초기화 함수 본체
   ❌ Clarke/Park/SVPWM 알고리즘 내부 구현
   ❌ CORDIC/FMAC 레지스터 접근 코드
-사용 모델: Qwen2.5-Coder-32B-Instruct (Q8, ~32GB)
+사용 모델: Gemma-4-31B-It (Q8, ~32GB)
 
 역할 축소로 난이도가 크게 낮아짐:
   이전: HAL API 전체를 정확히 생성 (어려움, 할루시네이션 위험)
@@ -308,9 +308,9 @@ LLM이 실제로 하는 일 (범위 명확히 제한)
 128GB 모델 배치
 
 Step 1 (검증)	Step 3 (통합)	동시 로드 합계
-권장	Qwen2.5-72B Q4 (~40GB)	Qwen2.5-Coder-32B Q8 (~32GB)	~72GB ✓
-최고 품질	Qwen2.5-72B Q8 (~72GB)	Qwen2.5-Coder-32B Q8 (~32GB)	~104GB ✓
-빠른 응답	Qwen2.5-72B Q4 (~40GB)	DeepSeek-Coder-V2-Lite (~16GB)	~56GB ✓
+권장	Gemma-4-31B Q4 (~40GB)	Gemma-4-31B Q8 (~32GB)	~72GB ✓
+최고 품질	Gemma-4-31B Q8 (~72GB)	Gemma-4-31B Q8 (~32GB)	~104GB ✓
+빠른 응답	Gemma-4-31B Q4 (~40GB)	DeepSeek-Coder-V2-Lite (~16GB)	~56GB ✓
 Step 2는 LLM 없음 — 두 모델 128GB 내 상시 로드, Step 전환 시 재로드 없음
 RAG 구축 가이드
 
@@ -435,7 +435,7 @@ retriever = index.as_retriever(similarity_top_k=5, filters=filters)
 기술 스택 정리
 
 레이어	Step 1 (검증)	Step 2 (코드 생성)
-LLM	Qwen2.5-72B-Instruct (Q4_K_M)	Qwen2.5-Coder-32B-Instruct (Q8)
+LLM	Gemma-4-31B-It (Q4_K_M)	Gemma-4-31B-It (Q8)
 실행 환경	Ollama (로컬, DGX Spark)	Ollama (로컬, DGX Spark)
 동시 로드	두 모델 합산 ~72GB → 128GB 내 상시 메모리 상주	
 RAG 프레임워크	LlamaIndex	LlamaIndex
@@ -468,8 +468,8 @@ Phase 3 — Fine-tuning (선택, 8~12주)
 목표: 사내 코딩 스타일에 최적화
 
 학습 데이터: CubeMX 자동 생성 코드 + 사내 코드 수집 (500~1,000쌍)
-검증 모델: Qwen2.5-72B QLoRA fine-tuning
-코드 모델: Qwen2.5-Coder-32B QLoRA fine-tuning
+검증 모델: Gemma-4-31B QLoRA fine-tuning
+코드 모델: Gemma-4-31B QLoRA fine-tuning
 GPU 요구: DGX Spark 128GB 단독으로 두 모델 모두 fine-tuning 가능
 별도 GPU 서버 불필요
 72B QLoRA: 6080GB 사용 (128GB 내 처리 가능)
@@ -644,9 +644,9 @@ STM32G474 CubeMX XML 파서 → 핀 AF JSON DB
 기존 보유 FOC/전류제어 코드 → Golden Module 등록 + 태깅 ← 바로 시작 가능
 Step 2 출력(CubeMX 코드) + Golden Module 조합 → 초기 학습 샘플 구성
 FDCAN 핸들러 / 6-step / DC모터 모듈 신규 작성
-Ollama + Qwen2.5-72B / Qwen2.5-Coder-32B 세팅
+Ollama + Gemma-4-31B / Gemma-4-31B 세팅
 Step 3 RAG 파이프라인 구성 (Golden Module RAG, BGE-M3 + Qdrant)
-Step 1 LLM 연결 (Qwen2.5-72B + 핀 검증 RAG)
+Step 1 LLM 연결 (Gemma-4-31B + 핀 검증 RAG)
 조합 자동화 스크립트 → 데이터셋 300개 목표
 데이터 충분히 쌓이면 Fine-tuning
 미결 사항 (결정 필요)

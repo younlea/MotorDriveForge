@@ -84,7 +84,7 @@ flowchart TD
 
     subgraph Backend ["2. 백엔드 파이프라인 (Step 2 에이전트)"]
         DataT["Step 1 결과 JSON 및 사용자 요구사항 프롬프트"]
-        LLM["Qwen2.5 Base + FineTuned LLM\n(템플릿 텍스트 파생 및 조작)"]
+        LLM["Gemma-4 Base + FineTuned LLM\n(템플릿 텍스트 파생 및 조작)"]
         TempFile["임시 ioc 및 stmcx 템플릿 파일 갱신"]
         
         CubeMX_CLI[["ST 공식 엔진\nSTM32CubeMX CLI (Headless)"]]

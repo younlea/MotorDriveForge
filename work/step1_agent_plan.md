@@ -100,7 +100,7 @@ RAG만으로 잡기 힘든 **정형화된 JSON 리포트 응답 양식**이나 *
    - 사용자의 자연어(FDCAN, OPAMP)와 핀맵 키워드들을 추출해 **Qdrant(벡터 DB)** 와 **BM25(키워드 역인덱스 DB)** 에 던집니다.
    - DB는 앞서 우리가 다운로드한 공식 문서(AN5306, RM0440 등)와 포럼 실패 사례에서 **관련된 검증 룰(Rule)** 들만 실시간으로 뽑아옵니다. (예: *"FDCAN을 쓸 때는 OSC IN/OUT 핀에 반드시 외부 크리스탈이 연결되어야 함"* 이라는 룰 확보)
 3. **거대 AI 추론 엔진 (Base Model + QLoRA 파인튜닝 어댑터)**
-   - 파인튜닝된 **Qwen2.5-72B 모델**에게 [사용자의 의도] + [변환된 핀맵 JSON] + [RAG가 찾아온 ST 공식 룰] 세 가지를 프롬프트로 융합하여 질문합니다.
+   - 파인튜닝된 **Gemma-4-31B 모델**에게 [사용자의 의도] + [변환된 핀맵 JSON] + [RAG가 찾아온 ST 공식 룰] 세 가지를 프롬프트로 융합하여 질문합니다.
    - 훈련된 모델은 *"전원/인프라 먼저 점검하고, 모터 상보 핀 쌍을 점검하고, 아날로그 충돌을 점검하라"*는 훈련된 사고 과정(Chain-of-Thought)을 거쳐 논리 결함을 잡아냅니다. 
 
 ### [Phase 3] 웹 리포트 출력 (Agent Output)
@@ -160,7 +160,7 @@ flowchart TD
     %% 파인튜닝 파이프라인
     subgraph FineTuning["3. LLM 파인튜닝 (QLoRA)"]
         C1["JSONL 학습 데이터셋 생성\n(질문-결과쌍 반자동화)"]
-        C2["Base Model 다운로드\n(Hugging Face 오픈소스:\nAlibaba/Qwen2.5-72B-Instruct)"]
+        C2["Base Model 다운로드\n(Hugging Face 오픈소스:\nAlibaba/Gemma-4-31B-It)"]
         C3["unsloth 4-bit QLoRA 훈련\n(도메인 지식 최적화)"]
         C4[("Fine-Tuned Adapter Module")]
         

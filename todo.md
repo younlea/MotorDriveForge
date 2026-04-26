@@ -168,7 +168,7 @@ python scripts/scrape_st_forum.py --max-items 300
 
 ```
 조건: 리뷰 에이전트 오류 사례 1,000건 수집 후
-모델: Qwen2.5-72B (Step 1용), Qwen2.5-Coder-32B (Step 3용)
+모델: Gemma-4-31B (Step 1용), Gemma-4-31B (Step 3용)
 설정: Unsloth QLoRA, r=32/64, lr=2e-4, 4096 ctx
 소요: ~3일 (DGX Spark)
 ```
