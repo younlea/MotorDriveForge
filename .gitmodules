@@ -4,3 +4,9 @@
 [submodule "dataset/opensource/MESC_FOC_ESC"]
 	path = dataset/opensource/MESC_FOC_ESC
 	url = https://github.com/davidmolony/MESC_FOC_ESC
+[submodule "dataset/opensource/bldc_vesc"]
+	path = dataset/opensource/bldc_vesc
+	url = https://github.com/vedderb/bldc
+[submodule "dataset/opensource/ODriveHardware"]
+	path = dataset/opensource/ODriveHardware
+	url = https://github.com/odriverobotics/ODriveHardware
