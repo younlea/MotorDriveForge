@@ -136,7 +136,7 @@ def main():
     parser.add_argument("--max-items", type=int, default=300)
     parser.add_argument(
         "--output",
-        default="/Users/younlea/source_code/MotorDriveForge/dataset/forum_qa/st_forum_qa.jsonl",
+        default="dataset/forum_qa/st_forum_qa.jsonl",
     )
     args = parser.parse_args()
 
