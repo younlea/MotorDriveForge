@@ -40,7 +40,7 @@ dataset/
 ST 홈페이지의 방화벽(HTTP/2 셧다운)을 피해, 로컬 PC 브라우저에서 아래 링크들을 클릭해 수동으로 다운로드하고 폴더에 정리합니다.
 - **하드웨어 기초**: [RM0440](https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) / [G474 Datasheet](https://www.st.com/resource/en/datasheet/stm32g474re.pdf) / [AN5031(HW가이드)](https://www.st.com/resource/en/application_note/dm00445657-getting-started-with-stm32g4-series-hardware-development-stmicroelectronics.pdf)
 - **아날로그 / 통신 (모터 핵심)**: [AN5306(OPAMP)](https://www.google.com/search?q=ST+AN5306+pdf) / [AN5346(ADC)](https://www.google.com/search?q=ST+AN5346+pdf) / [AN5348(FDCAN)](https://www.google.com/search?q=ST+AN5348+pdf) / [AN3070(RS485)](https://www.google.com/search?q=ST+AN3070+pdf)
-- **FOC 제어 / 레퍼런스**: [UM3027(최신 v6.x FOC 제어루프)](https://www.google.com/search?q=ST+UM3027+pdf) / [AN5166(전력/MTPA튜닝)](https://www.google.com/search?q=ST+AN5166+pdf) / [EVSPIN32G4 다축 회로도 (ST 로그인 필수/CAD Resources 탭)](https://www.st.com/en/evaluation-tools/evspin32g4-dual.html#cad-resources)
+- **FOC 제어 / 레퍼런스**: [UM3027(최신 v6.x FOC 제어루프)](https://www.google.com/search?q=ST+UM3027+pdf) / [UM3026(SDK v6.0 시작 및 커스텀 보드 설정 가이드)](https://www.google.com/search?q=ST+UM3026+pdf) / [EVSPIN32G4 다축 회로도 (ST 로그인 필수/CAD Resources 탭)](https://www.st.com/en/evaluation-tools/evspin32g4-dual.html#cad-resources)
 
 ### [📁 dataset/forum_qa/] (자동 스크립트 기반/수동 대체)
 - `scripts/scrape_st_forum.py` 커스텀 스크립트를 통해 에러 실패 사례를 JSONL(`st_forum_qa.jsonl`) 형식으로 자동 구축합니다. 
