@@ -121,8 +121,8 @@ RAG만으로 잡기 힘든 **정형화된 JSON 리포트 응답 양식**이나 *
 새로운 목표를 반영하여, 현재 파일이 생성된 `work/` 디렉토리 하위에서 다음 단계로 차근차근 진행합니다.
 
 1. **Step 1 (설계 확정)**: 현재의 `work/step1_agent_plan.md` 검토.
-2. **Step 2 (검증 규칙 데이터 마이닝 파이프라인 구축)**: ST 공식 홈페이지와 포럼(`scrape_st_forum.py`)에서 다축 제어 보드 및 오류 사례 데이터를 긁어와서, LLM이 설계 룰을 자동 추출하는 파이프라인(`work/rule_extractor.py`)을 구동합니다.
-3. **Step 3 (정적인 데이터 추출)**: 자동화 스크립트(`parse_cubemx_xml.py`)를 통해 AF 핀맵 DB JSON을 생성합니다.
+2. **Step 2 (검증 규칙 데이터 마이닝 파이프라인 구축)**: ST 공식 홈페이지 자료 수동화 및 오픈소스 Git Submodule (`Arduino-FOC` 등)을 통해 다축 제어 보드 회로도와 오류 사례를 취합하여, LLM이 설계 룰을 자동 추출하는 파이프라인(`work/rule_extractor.py`)을 구동합니다.
+3. **Step 3 (정적인 데이터 추출)**: 분석 스크립트(`parse_cubemx_xml.py`)를 통해 AF 핀맵 DB JSON을 생성합니다.
 4. **Step 4 (검증 LLM + 룰 로직 코딩)**: CSV 와 프롬프트를 입력받아 규칙들을 바탕으로 불량 결선을 찾아내는 Python 로직(`agent_core.py`)을 작성합니다.
 5. **Step 5 (Web UI 붙이기)**: 잘 동작하는 파이썬 코드를 웹 프레임워크(FastAPI/Streamlit) 위에 올려 웹 뷰어를 완성합니다.
 
@@ -139,8 +139,8 @@ RAG만으로 잡기 힘든 **정형화된 JSON 리포트 응답 양식**이나 *
 flowchart TD
     %% 데이터 수집 병렬 파이프라인
     subgraph DataCollection["1. 데이터 수집 (Data Collection)"]
-        A_Manual[("수동 다운로드\n(AN5031, Datasheets,\nEVSPIN32G4-DUAL)")]
-        A_Script[("자동 스크립트 수집\n(CubeMX XML,\nST Forum Q&A)")]
+        A_Manual[("수동 다운로드 & 아카이빙\n(공식 PDF, 포럼 Q&A)")]
+        A_OpenSource[("오픈소스 Git 모듈\n(SimpleFOC, stm32-esc)")]
     end
 
     %% RAG 체계 구축
@@ -151,7 +151,7 @@ flowchart TD
         B4[("BM25 역인덱스\n(키워드 기반)")]
         
         A_Manual --> B1
-        A_Script --> B1
+        A_OpenSource --> B1
         B1 --> B2
         B2 --> B3
         B2 --> B4
@@ -160,11 +160,11 @@ flowchart TD
     %% 파인튜닝 파이프라인
     subgraph FineTuning["3. LLM 파인튜닝 (QLoRA)"]
         C1["JSONL 학습 데이터셋 생성\n(질문-결과쌍 반자동화)"]
-        C2["Base Model 다운로드\n(Hugging Face 오픈소스:\nAlibaba/Gemma-4-31B-It)"]
+        C2["Base Model 다운로드\n(Hugging Face 오픈소스:\nGoogle/Gemma-4)"]
         C3["unsloth 4-bit QLoRA 훈련\n(도메인 지식 최적화)"]
         C4[("Fine-Tuned Adapter Module")]
         
-        A_Script --> C1
+        A_OpenSource --> C1
         A_Manual --> C1
         C2 --> C3
         C1 --> C3
