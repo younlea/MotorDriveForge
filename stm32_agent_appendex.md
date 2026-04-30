@@ -1,6 +1,6 @@
 STM32G4 Agent — 어펜딕스
 
-최초 작성: 2026-04-10
+최초 작성: 2026-04-10 마지막 수정: 2026-04-27 (모델 Gemma-4 변경, 실제 데이터셋 반영, Step 2 워크플로우 반영)
 목차
 
 A. 모델별 학습 데이터 수집 가이드
@@ -8,9 +8,9 @@ B. 모델 학습 방법 상세
 C. 웹 애플리케이션 개발 프로세스
 A. 모델별 학습 데이터 수집 가이드
 
-A-1. Step 1 — 핀 검증 Agent (RAG 지식베이스)
+A-1. Step 1 — HW 설계 검증 Agent (RAG 지식베이스)
 
-수집 대상 문서 목록
+수집 대상 문서 목록 — 실제 수집 현황
 
 ① CubeMX XML 핀 데이터베이스 (최우선)
 
@@ -27,6 +27,7 @@ A-1. Step 1 — 핀 검증 Agent (RAG 지식베이스)
 
 처리 방식: RAG 불필요 — Python으로 파싱해 JSON DB 직접 구축
 결과물: pin_af_db.json  (약 500KB)
+상태: ⬜ X-CUBE-MCSDK 설치 후 수집 필요
 # 파싱 스크립트 예시
 import xml.etree.ElementTree as ET, json, glob
 
@@ -47,57 +48,62 @@ def build_pin_db(xml_dir: str) -> dict:
 
 db = build_pin_db(r"C:\...\STM32CubeMX\db\mcu")
 json.dump(db, open("pin_af_db.json","w"), indent=2)
-② STM32G4 데이터시트 (PDF → RAG)
+② ST 공식 문서 (PDF → RAG) — ✅ 14건 수집 완료 (55MB)
 
-문서명: STM32G474xB/xC/xE datasheet (DS12288)
-페이지 수: ~200페이지
-ST 공식 문서 번호: DS12288 Rev 5 이상
-
-추출 대상 섹션만 처리:
-  - Table 11~15: Alternate function mapping (약 30페이지)
-  - Table 5~8:   Pin description (약 20페이지)
-  - Section 3.4: Memory map
-  총 대상: 약 50페이지 / ~300 청크
+실제 수집 파일 (dataset/official_docs/):
+  rm0440-stm32g4-series-*.pdf                  (39MB, 레퍼런스 매뉴얼)
+  stm32g474re.pdf                              (3MB, 데이터시트)
+  dm00445657-getting-started-*.pdf             (4.3MB, HW 개발 가이드 AN5031)
+  an5306-operational-amplifier-*.pdf           (907KB, OPAMP 전류 센싱)
+  an5346-stm32g4-adc-*.pdf                    (201KB, ADC 최적화)
+  an5348-fdcan-*.pdf                           (888KB, FDCAN 가이드)
+  an3070-managing-the-driver-*.pdf             (194KB, RS-485 DE핀)
+  evspin32g4-dual-schematics.pdf              (299KB, 다축 레퍼런스 회로도)
+  evspin32g4-dual.pdf                          (1.2MB, 평가보드 매뉴얼)
+  evspin32g4-dual-bom.pdf                      (197KB, BOM)
+  evspin32g4-dual-manufacturing.zip            (645KB, 제조 데이터)
+  um3027-*.pdf                                 (3.9MB, MCSDK v6 Workbench)
+  um3016-*.pdf                                 (1.2MB, MCSDK v6 Profiler)
+  64361889.pdf                                 (1.2MB, 추가 문서)
 
 청킹 전략:
   - 핀 테이블 행 단위: 1행 = 1청크
-    {"pin":"PA8", "af6":"TIM1_CH1", "af5":"...", "type":"I/O", "level":"FT"}
-  - 설명 섹션: 256토큰 단위, 32토큰 overlap
+  - 설명 섹션: 512토큰 단위, 64토큰 overlap
   - 툴: pdfplumber (테이블 추출), PyMuPDF (텍스트)
-③ Reference Manual RM0440
+③ 오픈소스 회로도 및 코드 — "정답 레퍼런스" (8개 프로젝트)
 
-문서명: STM32G4 Series Reference Manual (RM0440)
-페이지 수: ~2000페이지
-추출 대상 챕터만:
-  - Chapter 25: General-purpose timers (TIM2~TIM5)      약 80페이지
-  - Chapter 24: Advanced-control timers (TIM1, TIM8, TIM20) 약 100페이지
-  - Chapter 21: ADC                                      약 80페이지
-  - Chapter 44: FDCAN                                    약 60페이지
-  - Chapter 17: CORDIC                                   약 20페이지
-  - Chapter 18: FMAC                                     약 20페이지
-  합계: 약 360페이지 / ~1200 청크
+✅ 실파일 다운로드 완료:
+  flatmcu (12MB)        — STM32G473CB FOC KiCad 회로도, 3상 브릿지 설계
+  STM32CubeG4 (43MB)    — ST 공식 HAL 예제 (HRTIM, TIM, ADC, OPAMP, FDCAN, CORDIC)
+
+⬜ Git Submodule 등록 완료, 초기화 필요 (git submodule update --init):
+  Arduino-FOC           — SimpleFOC, 다양한 환경 포팅 STM32G4 핀 할당 지침
+  stm32-esc             — B-G431B-ESC1 보드 맞춤형 최적화 레지스터 세팅
+  moteus (mjbots)       — 고정밀 로봇 관절 제어 STM32G4 액추에이터 레퍼런스
+  MESC_FOC_ESC          — 하이엔드 드론/모빌리티 대전력 설계 핀 충돌 회피
+  bldc_vesc (VESC)      — 세계 표준 오픈소스 ESC, 다양한 모터 토폴로지 레퍼런스
+  ODriveHardware        — 글로벌 산업 표준 FOC 아날로그 결선 규칙
 
 청킹 전략:
-  - 레지스터 설명: 레지스터 단위 청크
-  - 기능 설명: 512토큰, 64토큰 overlap
-④ Errata Sheet
+  - C/H 파일: 함수 단위 청킹 (정규식 함수 경계 탐지)
+  - KiCad 회로도: 서브시스템 단위 (MCU, ThreePhaseBridge, GateDriver 등)
+  - 메타데이터: {source, file, module_type, g4_accel_used}
+④ ST 포럼 Q&A — 에러 사례
 
-문서명: STM32G4 Errata sheet (ES0430)
-페이지 수: ~40페이지
-전체 수집 (알려진 핀/주변장치 버그)
-청킹: 항목 단위 (1 이슈 = 1 청크)
-예상 청크 수: ~50개
+상태: ⬜ st_forum_qa.jsonl 생성 예정 (현재 0건)
+파이프라인: scripts/scrape_st_forum.py --max-items 300
+청킹: Q+A 쌍 1개 = 1 청크
 최종 RAG DB 규모 (Step 1)
 
-소스	청크 수	처리 방식
-CubeMX XML → JSON DB	—	규칙 엔진 직접 조회 (RAG 아님)
-데이터시트 핀 테이블	~300	벡터 임베딩
-Reference Manual 선택 챕터	~1,200	벡터 임베딩
-Errata Sheet	~50	벡터 임베딩
-합계	~1,550 청크	
-A-2. Step 1 — 핀 검증 Agent (Fine-tuning 데이터)
+소스	청크 수	상태
+CubeMX XML → JSON DB	—	⬜ (규칙 엔진 직접 조회)
+데이터시트/AN 등 공식 PDF	~1,500	✅ 14건 수집 완료
+오픈소스 코드/회로도	~800	✅ 2건 / ⬜ 6건
+포럼 에러 사례	~300	⬜ 수집 예정
+합계	~2,600 청크	
+A-2. Step 1 — HW 설계 검증 Agent (Fine-tuning 데이터)
 
-규칙 엔진으로 정답을 자동 생성할 수 있어 대부분 자동화 가능.
+규칙 엔진 + 오픈소스 회로도로 정답을 자동 생성할 수 있어 대부분 자동화 가능.
 데이터 형식
 
 // 입력
@@ -105,6 +111,7 @@ A-2. Step 1 — 핀 검증 Agent (Fine-tuning 데이터)
   "instruction": "STM32G474RET6 회로도를 검증해줘.",
   "input": {
     "chip": "STM32G474RET6",
+    "prompt": "BLDC 1축 FOC, 엔코더, FDCAN 1Mbps, 내부 OPAMP",
     "pins": [
       {"pin": "PA8",  "function": "TIM1_CH1",  "af": "AF6"},
       {"pin": "PA9",  "function": "TIM1_CH2",  "af": "AF7"},
@@ -113,12 +120,17 @@ A-2. Step 1 — 핀 검증 Agent (Fine-tuning 데이터)
   }
 }
 
-// 출력 (정답)
+// 출력 (정답) — 3계층 검증 결과
 {
   "output": {
     "validation": "FAIL",
+    "infra_check": {"VDD": "OK", "VCAP": "OK", "BOOT0": "OK", "SWD": "OK"},
+    "motor_logic_check": {
+      "complementary_pwm": "FAIL — PA9(TIM1_CH2)의 하단은 TIM1_CH2N이어야 함"
+    },
     "errors": [
       {
+        "layer": "motor_logic",
         "pin": "PA9",
         "assigned_function": "TIM1_CH2",
         "assigned_af": "AF7",
@@ -133,116 +145,77 @@ A-2. Step 1 — 핀 검증 Agent (Fine-tuning 데이터)
 데이터 수집 방법 및 목표 수량
 
 자동 생성 가능 데이터:
-  방법: pin_af_db.json 기반으로 올바른/잘못된 AF 조합 자동 생성
+  방법: pin_af_db.json + 오픈소스 회로도 기반으로 올바른/잘못된 설계 자동 생성
   스크립트: generate_verification_dataset.py
 
   케이스 종류:
-    ① 완전 정상 (PASS)                    → 전체의 30%
-    ② AF 번호 오류 1개                    → 전체의 25%
-    ③ AF 번호 오류 2개 이상               → 전체의 15%
-    ④ 핀 중복 배정                        → 전체의 10%
-    ⑤ 전용 핀 (NRST/BOOT0) 잘못 사용    → 전체의 10%
-    ⑥ 전원 핀 (VDD/VSS) 누락             → 전체의 10%
+    ① 완전 정상 (PASS) — 오픈소스 실제 설계 기반     → 전체의 25%
+    ② AF 번호 오류 1~2개                              → 전체의 20%
+    ③ 상보 PWM 쌍 오류 (다른 타이머 사용)             → 전체의 15%
+    ④ 인프라 핀 누락 (BOOT0 플로팅, VCAP 미연결)     → 전체의 15%
+    ⑤ 핀 중복 배정                                    → 전체의 10%
+    ⑥ 전용 핀 (NRST/BOOT0) 잘못 사용                → 전체의 10%
+    ⑦ OPAMP/ADC 충돌                                  → 전체의 5%
 
 목표 수량:
-  RAG 없이 기본 동작:   500쌍 (2~3일 자동 생성 가능)
-  Fine-tuning 적용:   1,000쌍 (1주일 이내)
-  권장 최종 목표:     2,000쌍 (다양한 칩 변형 포함)
-# 자동 생성 스크립트 핵심 로직
-import json, random
-
-def generate_fault_case(db, chip, num_pins=6, fault_type="af_error"):
-    chip_db = db[chip]
-    pins = random.sample(list(chip_db.keys()), num_pins)
-    result = []
-    errors = []
-    for pin in pins:
-        signals = chip_db[pin]["signals"]
-        if not signals:
-            continue
-        func = random.choice(signals)
-        correct_af = chip_db[pin]["af"].get(func, "")
-
-        if fault_type == "af_error" and random.random() < 0.3:
-            # 의도적으로 틀린 AF 번호 주입
-            wrong_af = f"AF{random.randint(0,15)}"
-            while wrong_af == correct_af:
-                wrong_af = f"AF{random.randint(0,15)}"
-            result.append({"pin": pin, "function": func, "af": wrong_af})
-            errors.append({"pin": pin, "correct_af": correct_af, "assigned_af": wrong_af})
-        else:
-            result.append({"pin": pin, "function": func, "af": correct_af})
-
-    return {"pins": result}, {"validation": "FAIL" if errors else "PASS", "errors": errors}
+  RAG 없이 기본 동작:   500쌍 (자동 생성 가능)
+  Fine-tuning 적용:   1,000쌍
 A-3. Step 3 — 알고리즘 통합 Agent (RAG 지식베이스)
 
 수집 대상
 
 ① Golden Module 소스 코드
 
-수집 대상 파일 (사내 보유 코드):
-  알고리즘 모듈 (.c + .h 쌍):
-    foc_clarke.c / .h
-    foc_park.c / .h
-    foc_inv_park.c / .h
-    foc_svpwm.c / .h
-    foc_current_pi.c / .h
-    foc_speed_pi.c / .h
-    foc_position_pi.c / .h
-    foc_angle_encoder.c / .h
-    foc_angle_hall.c / .h
-    foc_angle_smo.c / .h
-    foc_current_sense.c / .h
-    bldc_6step_hall.c / .h   (신규)
-    dc_motor_pid.c / .h      (신규)
-    fdcan_motor_cmd.c / .h   (신규)
-    multi_axis_sync.c / .h   (신규)
+현재 등록됨 (golden_modules/):
+  bldc_6step_hall.c/.h    → Hall 6-Step + BRK 보호
+  dc_motor_pid.c/.h       → DC모터 H-bridge + PID
+  fdcan_motor_cmd.c/.h    → FDCAN 커맨드 파싱
+  multi_axis_sync.c/.h    → 2축/3축 동기화 타이밍
+
+오픈소스에서 추출 예정:
+  foc_clarke.c/.h         → Clarke 변환 (Arduino-FOC / MESC)
+  foc_park.c/.h           → Park 변환 + CORDIC (Arduino-FOC / MESC)
+  foc_svpwm.c/.h          → SVPWM (VESC / MESC)
+  foc_current_pi.c/.h     → PI 제어기 (moteus / MESC)
+  foc_current_sense.c/.h  → ADC + OPAMP (flatmcu)
+
+향후 사내 코드 확보 시 교체 예정.
 
 청킹 전략:
-  - 함수 단위 청킹 (AST 파싱 또는 정규식)
-  - 함수 하나 = 청크 하나
+  - 함수 단위 청킹 (정규식 또는 AST 파싱)
   - 메타데이터: {"file":"foc_park.c","func":"FOC_ParkTransform",
                  "module":"FOC","type":"transform","g4_accel":"CORDIC"}
-  예상 청크 수: ~150개 (함수 단위)
-② STM32CubeG4 HAL 드라이버 소스
+  예상 청크 수: ~150개
 
-경로: STM32CubeG4\Drivers\STM32G4xx_HAL_Driver\Src\
+② STM32CubeG4 HAL 드라이버 소스 (dataset/opensource/STM32CubeG4/)
 
-수집 파일:
-  stm32g4xx_hal_tim.c         (~3,000줄)
-  stm32g4xx_hal_adc.c         (~2,500줄)
-  stm32g4xx_hal_fdcan.c       (~2,000줄)
-  stm32g4xx_hal_cordic.c      (~500줄)
-  stm32g4xx_hal_fmac.c        (~800줄)
-  stm32g4xx_hal_opamp.c       (~600줄)
-  stm32g4xx_hal_gpio.c        (~400줄)
+수집 파일 (sparse checkout 완료):
+  Projects/STM32G474E-EVAL/Examples/OPAMP/ — 타이머 제어 먹스, PGA
+  Projects/STM32G474E-EVAL/Examples/ADC/   — 보정, 주입채널, 연속변환
+  Projects/STM32G474E-EVAL/Examples/FDCAN/ — FDCAN 통신 예제
+  Projects/STM32G474E-EVAL/Examples/CORDIC/— Sin/Cos DMA
+  Projects/NUCLEO-G474RE/Examples_LL/HRTIM/— 파형생성, CBC 데드타임
+  Projects/NUCLEO-G474RE/Examples_LL/TIM/  — PWM, BreakAndDeadtime
 
 청킹 전략:
   - 공개 API 함수 단위 (HAL_로 시작하는 함수)
-  - 내부 함수(_)는 제외
   예상 청크 수: ~200개
-③ CubeMX 자동 생성 코드 예제 모음
 
-생성 방법:
-  CubeMX에서 다양한 G4 설정으로 코드 생성 → 수집
-  최소 30가지 설정 조합으로 생성
+③ 오픈소스 모터 제어 프로젝트 소스 (submodule 초기화 후)
 
-  조합 축:
-    모터 타이머:  TIM1 단독 / TIM1+TIM8 / TIM1+TIM8+TIM20
-    ADC 설정:    단순 / Injected+DMA / 멀티채널
-    FDCAN 유무:  있음 / 없음
-    CORDIC 유무: 있음 / 없음
+  Arduino-FOC    — STM32 하드웨어 레이어 + 드라이버 코드
+  MESC_FOC_ESC   — 고급 전류 제어 + 관측기
+  bldc_vesc      — 모터 제어 상태 머신 + 통신 프로토콜
+  moteus         — 정밀 위치 제어 + 전류 루프
+  예상 청크 수: ~500개
 
-  수집 파일 (설정당):
-    main.c / tim.c / adc.c / fdcan.c / cordic.c
-  예상 청크 수: ~500개 (30설정 × 17청크 평균)
 최종 RAG DB 규모 (Step 3)
 
 소스	청크 수
 Golden Module 함수 단위	~150
-HAL 드라이버 공개 API	~200
-CubeMX 생성 예제	~500
-Reference Manual 주변장치 챕터 (Step 1과 공유)	~1,200
+STM32CubeG4 HAL 예제	~200
+오픈소스 모터 제어 코드	~500
+공식 PDF 주변장치 챕터 (Step 1과 공유)	~1,200
 합계	~2,050 청크
 A-4. Step 3 — 알고리즘 통합 Agent (Fine-tuning 데이터)
 
@@ -273,41 +246,10 @@ A-4. Step 3 — 알고리즘 통합 Agent (Fine-tuning 데이터)
     "fdcan_handler_c": "/* FDCAN 핸들러 */"
   }
 }
-데이터 생성 파이프라인 (반자동화)
-
-[Layer 1 자동화]
-  CubeMX CLI로 다양한 설정 조합 코드 생성
-  → 30~50가지 HAL 초기화 코드 확보
-
-[Layer 2 수동 작업]
-  시니어 FW 엔지니어가 각 Golden Module 작성/검증
-  → 15개 모듈 × 1~2일 = 3~4주 작업
-
-[Layer 3 반자동화]
-  Layer 1(CubeMX) + Layer 2(모듈) 조합 스크립트
-  엔지니어가 통합 코드 검토/수정
-  → 1조합당 1~2시간
-
-목표 수량 (단계별):
-  1단계 (RAG 운영 시작):     50쌍  — 품질 중심, 전수 HW 검증
-  2단계 (기본 fine-tuning): 200쌍  — 컴파일 검증 100%, HW 검증 30%
+목표 수량:
+  1단계 (RAG 운영 시작):     50쌍  — 품질 중심
+  2단계 (기본 fine-tuning): 200쌍  — 컴파일 검증 100%
   3단계 (고품질 fine-tuning):500쌍  — 다양한 조합 포함
-유효 조합 매트릭스 (~50개)
-
-모터 종류	제어 방식	축 수	피드백	통신	샘플 수
-BLDC	FOC	1	엔코더	FDCAN	5
-BLDC	FOC	1	Hall	FDCAN	5
-BLDC	FOC	1	Sensorless	FDCAN	4
-BLDC	FOC	2	엔코더	FDCAN	5
-BLDC	FOC	2	Hall	FDCAN	4
-BLDC	6-step	1	Hall	FDCAN	4
-BLDC	6-step	1	Hall	UART	3
-DC Motor	PID	1	엔코더	FDCAN	4
-DC Motor	PID	2	엔코더	FDCAN	4
-DC Motor	PID	3	엔코더	FDCAN	3
-BLDC	FOC	1	엔코더	FDCAN+UART	4
-BLDC	FOC	3	엔코더	FDCAN	5
-합계					~50
 B. 모델 학습 방법 상세
 
 B-1. 환경 설정
@@ -333,29 +275,6 @@ pip install unsloth                # 학습 속도 2배 가속
 # 평가
 pip install evaluate rouge-score
 pip install arm-none-eabi-gcc     # 코드 컴파일 검증용
-디렉토리 구조
-
-/workspace/stm32_agent/
-├── data/
-│   ├── step1_verification/
-│   │   ├── train.jsonl          # 학습 데이터 (80%)
-│   │   ├── val.jsonl            # 검증 데이터 (10%)
-│   │   └── test.jsonl           # 테스트 데이터 (10%)
-│   └── step3_integration/
-│       ├── train.jsonl
-│       ├── val.jsonl
-│       └── test.jsonl
-├── models/
-│   ├── base/                    # 다운받은 베이스 모델
-│   └── finetuned/               # 학습 완료 모델
-├── scripts/
-│   ├── prepare_data.py
-│   ├── train_step1.py
-│   ├── train_step3.py
-│   └── evaluate.py
-└── rag/
-    ├── build_index.py
-    └── query.py
 B-2. RAG 지식베이스 구축
 
 임베딩 및 인덱싱 파이프라인
@@ -384,7 +303,7 @@ vector_store = QdrantVectorStore(
 # 코드 파일 청킹
 code_splitter = CodeSplitter(
     language="c",
-    chunk_lines=40,         # 함수 단위에 맞는 크기
+    chunk_lines=40,
     chunk_lines_overlap=5,
     max_chars=1500
 )
@@ -394,49 +313,21 @@ text_splitter = SentenceSplitter(
     chunk_size=512,
     chunk_overlap=64
 )
-
-def ingest_golden_modules(module_dir: str):
-    """Golden Module .c/.h 파일 → 청킹 → 인덱싱"""
-    docs = []
-    for path in glob.glob(f"{module_dir}/*.c"):
-        with open(path) as f:
-            content = f.read()
-        doc = Document(
-            text=content,
-            metadata={
-                "source": "golden_module",
-                "file": os.path.basename(path),
-                "module_type": extract_module_type(path),  # "FOC", "FDCAN" 등
-                "language": "c"
-            }
-        )
-        docs.append(doc)
-    return docs
 Qdrant Docker 실행
 
-# docker-compose.yml
-version: '3.8'
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - ./qdrant_storage:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
 docker compose up -d qdrant
 
 # 인덱스 구축 실행
 python rag/build_index.py \
   --golden_modules ./golden_modules/ \
-  --hal_sources ./STM32CubeG4/Drivers/ \
-  --datasheet_chunks ./data/chunks/datasheet/ \
+  --hal_sources ./dataset/opensource/STM32CubeG4/ \
+  --opensource_sources ./dataset/opensource/ \
+  --datasheet_chunks ./dataset/official_docs/ \
   --output_collection stm32g4_knowledge
 B-3. Step 1 모델 — QLoRA Fine-tuning
 
-베이스 모델: Qwen/Qwen2.5-72B-Instruct 목적: 핀 검증 리포트 포맷 통일 + 한국어 설명 품질 향상
+베이스 모델: Google/Gemma-4-31B-IT (Dense)
+목적: 3계층 HW 검증 리포트 포맷 통일 + 한국어 설명 품질 향상
 데이터 준비
 
 # scripts/prepare_data.py
@@ -448,14 +339,13 @@ def load_verification_data(jsonl_path: str) -> Dataset:
     with open(jsonl_path) as f:
         for line in f:
             item = json.loads(line)
-            # Qwen2.5 채팅 포맷으로 변환
             records.append({
                 "messages": [
                     {
                         "role": "system",
                         "content": (
-                            "당신은 STM32G4 MCU 핀 검증 전문가입니다. "
-                            "회로도의 핀 연결이 STM32G4 AF 스펙에 맞는지 검증하고 "
+                            "당신은 STM32G4 MCU HW 설계 검증 전문가입니다. "
+                            "회로도의 핀 연결이 STM32G4 스펙에 맞는지 3계층(인프라/모터논리/페리페럴) 검증하고 "
                             "결과를 JSON 형식으로 반환하세요."
                         )
                     },
@@ -475,11 +365,10 @@ def load_verification_data(jsonl_path: str) -> Dataset:
 # scripts/train_step1.py
 from unsloth import FastLanguageModel
 from trl import SFTTrainer, SFTConfig
-from datasets import load_dataset
 
 # 모델 로드 (4bit 양자화)
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name  = "/workspace/models/base/Qwen2.5-72B-Instruct",
+    model_name  = "google/gemma-4-31b-it",
     max_seq_length = 4096,
     dtype       = None,          # bfloat16 자동 감지
     load_in_4bit = True,
@@ -488,23 +377,17 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 # LoRA 어댑터 설정
 model = FastLanguageModel.get_peft_model(
     model,
-    r              = 32,         # LoRA rank — 높을수록 품질↑ 메모리↑
-    target_modules = [           # Qwen2.5 어텐션 레이어
+    r              = 32,
+    target_modules = [
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj"
     ],
-    lora_alpha     = 32,         # 보통 r과 동일하게 설정
+    lora_alpha     = 32,
     lora_dropout   = 0.05,
     bias           = "none",
     use_gradient_checkpointing = "unsloth",
     random_state   = 42,
 )
-
-# 데이터 로드
-dataset = load_dataset("json", data_files={
-    "train": "/workspace/data/step1_verification/train.jsonl",
-    "validation": "/workspace/data/step1_verification/val.jsonl",
-})
 
 # 학습 설정
 trainer = SFTTrainer(
@@ -515,58 +398,53 @@ trainer = SFTTrainer(
     args = SFTConfig(
         output_dir              = "/workspace/models/finetuned/step1_v1",
         per_device_train_batch_size = 2,
-        gradient_accumulation_steps = 8,    # 실효 배치: 16
+        gradient_accumulation_steps = 8,
         num_train_epochs        = 3,
         learning_rate           = 2e-4,
         lr_scheduler_type       = "cosine",
         warmup_ratio            = 0.05,
-        fp16                    = False,
-        bf16                    = True,     # GB10 Blackwell bf16 지원
+        bf16                    = True,
         logging_steps           = 10,
         save_steps              = 100,
         eval_steps              = 100,
-        evaluation_strategy     = "steps",
         load_best_model_at_end  = True,
-        report_to               = "tensorboard",
         max_seq_length          = 4096,
-        packing                 = True,     # 짧은 시퀀스 패킹으로 속도↑
+        packing                 = True,
     ),
 )
 
 trainer.train()
-
-# 어댑터 저장
 model.save_pretrained("/workspace/models/finetuned/step1_v1/adapter")
-tokenizer.save_pretrained("/workspace/models/finetuned/step1_v1/adapter")
 예상 학습 시간 (DGX Spark 128GB)
 
 데이터 수	Epoch	예상 시간
-500쌍	3	~2시간
-1,000쌍	3	~4시간
-2,000쌍	3	~8시간
+500쌍	3	~3시간
+1,000쌍	3	~6시간
 B-4. Step 3 모델 — QLoRA Fine-tuning
 
-베이스 모델: Qwen/Qwen2.5-Coder-32B-Instruct 목적: USER CODE 영역에 Golden Module 통합 코드 생성
+베이스 모델: Google/Gemma-4-26B-IT (MoE)
+목적: USER CODE 영역에 Golden Module 통합 코드 생성
+
+주의: MoE 모델 QLoRA는 Dense보다 복잡. Expert 라우팅 레이어 안정성 주의 필요.
+
 주요 차이점 (Step 1 대비)
 
-# scripts/train_step3.py — Step 1과 다른 부분만 표시
-
+# scripts/train_step3.py
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name   = "/workspace/models/base/Qwen2.5-Coder-32B-Instruct",
+    model_name   = "google/gemma-4-26b-it",
     max_seq_length = 8192,       # 코드는 길다 → 더 큰 컨텍스트
     load_in_4bit = True,
 )
 
 model = FastLanguageModel.get_peft_model(
     model,
-    r              = 64,         # 코드 생성은 rank 높게 (품질 중요)
+    r              = 64,         # 코드 생성은 rank 높게
     target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
                       "gate_proj", "up_proj", "down_proj"],
     lora_alpha     = 64,
     lora_dropout   = 0.05,
 )
 
-# 시스템 프롬프트 (코드 생성 특화)
 SYSTEM_PROMPT = """당신은 STM32G4 임베디드 펌웨어 전문가입니다.
 CubeMX가 생성한 HAL 초기화 코드에 모터 제어 알고리즘을 통합하는 코드를 작성합니다.
 규칙:
@@ -574,41 +452,21 @@ CubeMX가 생성한 HAL 초기화 코드에 모터 제어 알고리즘을 통합
 2. HAL 초기화 함수(MX_*)는 절대 수정하지 않습니다.
 3. 제공된 Golden Module 헤더를 include하고 함수를 호출합니다.
 4. 주석은 한국어로 작성합니다."""
-
-# 학습 설정 (코드는 시퀀스가 길어 배치 줄임)
-SFTConfig(
-    per_device_train_batch_size = 1,
-    gradient_accumulation_steps = 16,   # 실효 배치: 16
-    max_seq_length              = 8192,
-    learning_rate               = 1e-4, # 코드 모델은 lr 낮게
-    num_train_epochs            = 5,    # 코드는 epoch 더 필요
-)
-예상 학습 시간 (DGX Spark 128GB)
-
-데이터 수	Epoch	예상 시간
-50쌍	5	~1시간
-200쌍	5	~6시간
-500쌍	5	~15시간
 B-5. 어댑터 병합 및 Ollama 배포
 
-# scripts/merge_and_deploy.py
-from unsloth import FastLanguageModel
+# Ollama에 등록 (Step 1)
+cat > Modelfile_step1 << 'EOF'
+FROM /workspace/models/gguf/step1_finetuned/model-q4_k_m.gguf
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+SYSTEM "당신은 STM32G4 HW 설계 검증 전문가입니다..."
+EOF
 
-# 어댑터 + 베이스 모델 병합
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name   = "/workspace/models/base/Qwen2.5-Coder-32B-Instruct",
-    load_in_4bit = True,
-)
-model.load_adapter("/workspace/models/finetuned/step3_v1/adapter")
+ollama create stm32-verifier-step1 -f Modelfile_step1
 
-# GGUF 포맷 변환 (Ollama 사용 가능 형식)
-model.save_pretrained_gguf(
-    "/workspace/models/gguf/step3_finetuned",
-    tokenizer,
-    quantization_method = "q8_0"   # Q8 품질 유지
-)
-# Ollama에 등록
-cat > Modelfile << 'EOF'
+# Ollama에 등록 (Step 3)
+cat > Modelfile_step3 << 'EOF'
 FROM /workspace/models/gguf/step3_finetuned/model-q8_0.gguf
 PARAMETER num_ctx 8192
 PARAMETER temperature 0.1
@@ -616,13 +474,10 @@ PARAMETER top_p 0.9
 SYSTEM "당신은 STM32G4 임베디드 펌웨어 전문가입니다..."
 EOF
 
-ollama create stm32-coder-step3 -f Modelfile
-ollama run stm32-coder-step3  # 테스트
+ollama create stm32-coder-step3 -f Modelfile_step3
 B-6. 평가 지표 및 기준
 
-Step 1 (핀 검증) 평가
-
-# scripts/evaluate.py
+Step 1 (HW 설계 검증) 평가
 
 def evaluate_step1(model, test_data):
     metrics = {
@@ -630,9 +485,9 @@ def evaluate_step1(model, test_data):
         "error_recall":     0,   # 실제 오류 중 잡아낸 비율 — 목표: > 95%
         "false_positive":   0,   # 정상 핀을 오류로 판단 — 목표: < 5%
         "json_valid":       0,   # JSON 형식 유효 — 목표: 100%
+        "infra_check":      0,   # 인프라 검증 정확도 — 목표: > 98%
+        "motor_logic":      0,   # 모터 논리 검증 정확도 — 목표: > 95%
     }
-    # 규칙 엔진 정답과 LLM 출력 비교
-    ...
 Step 3 (코드 통합) 평가
 
 def evaluate_step3(model, test_data):
@@ -642,18 +497,6 @@ def evaluate_step3(model, test_data):
         "module_included":  0,   # 필요 모듈 include 여부 — 목표: > 98%
         "hal_untouched":    0,   # HAL 초기화 코드 수정 없음 — 목표: 100%
     }
-
-    for sample in test_data:
-        generated = model.generate(sample["input"])
-
-        # 컴파일 자동 검증
-        result = subprocess.run(
-            ["arm-none-eabi-gcc", "-c", "-mcpu=cortex-m4",
-             "-I./include", generated_file],
-            capture_output=True
-        )
-        metrics["compile_pass"] += int(result.returncode == 0)
-    ...
 C. 웹 애플리케이션 개발 프로세스
 
 C-1. 기술 스택 결정
@@ -691,8 +534,8 @@ C-2. 시스템 아키텍처 (프로덕션)
 │  ┌─────────────┐  ┌────────────┐  ┌──────────────┐   │
 │  │ Ollama      │  │  Qdrant    │  │  CubeMX CLI  │   │
 │  │ :11434      │  │  :6333     │  │  (subprocess)│   │
-│  │ Qwen2.5-72B │  │  Vector DB │  │              │   │
-│  │ Qwen2.5-Cod │  │            │  │              │   │
+│  │ Gemma4 31B  │  │  Vector DB │  │              │   │
+│  │ Gemma4 26B  │  │            │  │              │   │
 │  └─────────────┘  └────────────┘  └──────────────┘   │
 └──────────────────────────────────────────────────────┘
 C-3. 백엔드 API 설계 (FastAPI)
@@ -701,68 +544,66 @@ C-3. 백엔드 API 설계 (FastAPI)
 from fastapi import FastAPI, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="STM32G4 Agent API", version="1.0.0")
+app = FastAPI(title="STM32G4 Agent API", version="2.0.0")
 
-app.add_middleware(CORSMiddleware,
-    allow_origins=["http://dgx-spark"],
-    allow_methods=["*"], allow_headers=["*"])
-
-# ── Step 1: 핀 검증 ──────────────────────────────────────
+# ── Step 1: HW 설계 검증 ──────────────────────────────────
 @app.post("/api/v1/validate")
 async def validate_pins(
     csv_file: UploadFile,
-    requirements: str  # JSON string
+    prompt: str  # 자연어 프롬프트
 ) -> ValidationResult:
     """
-    입력: 핀맵 CSV + 요구사항 JSON
-    출력: 검증 결과 (PASS/FAIL + 오류 목록)
+    입력: 핀맵 CSV + 자연어 프롬프트
+    출력: 3계층 검증 결과 (PASS/FAIL + 오류 목록)
     게이트: errors > 0이면 FAIL 상태 반환, Step2 호출 불가
     """
     pins = parse_csv(await csv_file.read())
-    reqs = json.loads(requirements)
 
-    # 1단계: 규칙 엔진 (빠름, 100% 정확)
-    rule_result = rule_engine.validate(pins)
+    # 1단계: 3계층 규칙 엔진 (빠름, 100% 정확)
+    rule_result = rule_engine.validate_3layer(pins)
 
-    # 2단계: LLM (자연어 설명 생성)
-    llm_explanation = await llm_client.explain_errors(rule_result)
+    # 2단계: RAG 검색 (관련 ST 규칙 실시간 참조)
+    rag_context = await rag_client.search(pins, prompt)
+
+    # 3단계: LLM (자연어 설명 생성 + 추가 검증)
+    llm_explanation = await llm_client.explain_errors(rule_result, rag_context)
 
     return ValidationResult(
         status="PASS" if not rule_result.errors else "FAIL",
+        infra_check=rule_result.infra,
+        motor_logic_check=rule_result.motor_logic,
+        peripheral_check=rule_result.peripheral,
         errors=rule_result.errors,
         warnings=rule_result.warnings,
         explanation=llm_explanation,
         validated_json=rule_result.to_json() if not rule_result.errors else None
     )
 
-# ── Step 2: CubeMX 자동화 ────────────────────────────────
+# ── Step 2: CubeMX 자동화 (4단계 워크플로우) ─────────────
 @app.post("/api/v1/generate")
 async def generate_hal_code(
-    validated_json: ValidatedPinJSON,    # Step 1 PASS 결과만 허용
+    validated_json: ValidatedPinJSON,
     session_id: str
 ) -> GenerationResult:
-    """
-    입력: Step 1 검증 완료 JSON (errors==[] 필수)
-    출력: CubeMX 생성 코드 파일 목록
-    검증 게이트: validated_json.status != "PASS"면 403 반환
-    """
     if validated_json.status != "PASS":
         raise HTTPException(403, "핀 검증을 먼저 통과해야 합니다.")
 
-    ioc_path = generate_ioc(validated_json)
-    success  = run_cubemx_cli(ioc_path)
-    files    = collect_generated_files(session_id)
+    # [2-1] .ioc 템플릿 수정
+    ioc_path = ioc_modifier.apply(validated_json)
+    # [2-2] CubeMX CLI 실행
+    success = cubemx_runner.generate(ioc_path)
+    # [2-3] LLM 스니펫 주입
+    snippet = await llm_client.generate_snippet(validated_json)
+    code_injector.inject(session_id, snippet)
+    # [2-4] ZIP 패키징
+    zip_path = packager.create_zip(session_id)
 
-    return GenerationResult(files=files, session_id=session_id)
+    return GenerationResult(files=files, zip_url=zip_path)
 
 # ── Step 3: 알고리즘 통합 (WebSocket — 스트리밍) ─────────
 @app.websocket("/ws/integrate/{session_id}")
 async def integrate_algorithm(websocket: WebSocket, session_id: str):
-    """
-    실시간 스트리밍으로 코드 생성 진행 상황 전송
-    """
     await websocket.accept()
-
     try:
         data = await websocket.receive_json()
         requirements = data["requirements"]
@@ -771,8 +612,6 @@ async def integrate_algorithm(websocket: WebSocket, session_id: str):
         modules = await rag_client.retrieve_modules(requirements)
 
         await websocket.send_json({"status": "코드 생성 중...", "progress": 30})
-
-        # LLM 스트리밍 출력
         async for chunk in llm_client.stream_integration(
             session_id, requirements, modules
         ):
@@ -783,7 +622,6 @@ async def integrate_algorithm(websocket: WebSocket, session_id: str):
             })
 
         await websocket.send_json({"status": "완료", "progress": 100})
-
     except Exception as e:
         await websocket.send_json({"status": "error", "message": str(e)})
     finally:
@@ -794,172 +632,11 @@ C-4. 프론트엔드 화면 구성 (React)
 
 /                   → 대시보드 (프로젝트 목록)
 /project/new        → 새 프로젝트 시작
-/project/:id/step1  → Step 1: 핀 검증
-/project/:id/step2  → Step 2: CubeMX 코드 생성 (자동, 진행 화면)
+/project/:id/step1  → Step 1: HW 설계 검증
+/project/:id/step2  → Step 2: CubeMX 코드 생성 (4단계 진행 화면)
 /project/:id/step3  → Step 3: 알고리즘 통합
 /project/:id/result → 최종 결과 & 다운로드
 /history            → 이전 프로젝트 이력
-핵심 컴포넌트 코드 (Step 1 — 핀 검증 화면)
-
-// src/pages/Step1ValidationPage.tsx
-import { useState, useCallback } from 'react'
-import { useDropzone } from 'react-dropzone'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { CheckCircle2, XCircle, AlertTriangle, Upload } from 'lucide-react'
-
-export default function Step1ValidationPage() {
-  const [csvFile, setCsvFile]       = useState<File | null>(null)
-  const [requirements, setReqs]     = useState(defaultRequirements)
-  const [result, setResult]         = useState<ValidationResult | null>(null)
-  const [loading, setLoading]       = useState(false)
-
-  const onDrop = useCallback((files: File[]) => setCsvFile(files[0]), [])
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop, accept: { 'text/csv': ['.csv'] }
-  })
-
-  const handleValidate = async () => {
-    setLoading(true)
-    const form = new FormData()
-    form.append('csv_file', csvFile!)
-    form.append('requirements', JSON.stringify(requirements))
-
-    const res  = await fetch('/api/v1/validate', { method: 'POST', body: form })
-    const data = await res.json()
-    setResult(data)
-    setLoading(false)
-  }
-
-  return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      {/* 헤더 */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center
-                        justify-center text-white font-bold text-lg">1</div>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">핀 검증</h1>
-          <p className="text-gray-500">회로도 핀맵이 STM32G4 AF 스펙에 맞는지 확인합니다</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-6">
-        {/* CSV 업로드 */}
-        <Card>
-          <CardHeader><CardTitle>회로도 핀맵 (CSV)</CardTitle></CardHeader>
-          <CardContent>
-            <div {...getRootProps()} className={`
-              border-2 border-dashed rounded-xl p-8 text-center cursor-pointer
-              transition-colors
-              ${isDragActive ? 'border-blue-500 bg-blue-50'
-                             : 'border-gray-300 hover:border-blue-400'}
-            `}>
-              <input {...getInputProps()} />
-              <Upload className="mx-auto mb-3 text-gray-400" size={36} />
-              {csvFile
-                ? <p className="font-medium text-blue-600">{csvFile.name}</p>
-                : <p className="text-gray-500">CSV 파일을 드래그하거나 클릭하여 업로드</p>
-              }
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* 요구사항 설정 */}
-        <Card>
-          <CardHeader><CardTitle>모터 요구사항</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: '모터 종류',   key: 'motor_type',      options: ['BLDC', 'DC Motor'] },
-                { label: '제어 방식',   key: 'control_method',  options: ['FOC', '6-step', 'PID'] },
-                { label: '피드백',      key: 'feedback',        options: ['encoder', 'hall', 'sensorless'] },
-                { label: '통신',        key: 'communication',   options: ['FDCAN', 'UART', 'FDCAN+UART'] },
-              ].map(({ label, key, options }) => (
-                <div key={key}>
-                  <label className="text-sm font-medium text-gray-700">{label}</label>
-                  <select
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                    value={(requirements as any)[key]}
-                    onChange={e => setReqs(r => ({ ...r, [key]: e.target.value }))}
-                  >
-                    {options.map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 실행 버튼 */}
-      <Button
-        className="w-full h-12 text-base font-semibold bg-blue-600 hover:bg-blue-700"
-        onClick={handleValidate}
-        disabled={!csvFile || loading}
-      >
-        {loading ? '검증 중...' : '🔍  핀 검증 실행'}
-      </Button>
-
-      {/* 결과 */}
-      {result && (
-        <Card className={`border-2 ${
-          result.status === 'PASS' ? 'border-green-400' : 'border-red-400'
-        }`}>
-          <CardHeader>
-            <div className="flex items-center gap-3">
-              {result.status === 'PASS'
-                ? <CheckCircle2 className="text-green-500" size={28} />
-                : <XCircle className="text-red-500" size={28} />
-              }
-              <CardTitle className={
-                result.status === 'PASS' ? 'text-green-700' : 'text-red-700'
-              }>
-                {result.status === 'PASS' ? '검증 통과 — Step 2 진행 가능' : '검증 실패 — 회로도 수정 필요'}
-              </CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* 오류 목록 */}
-            {result.errors.map((err, i) => (
-              <Alert key={i} variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertDescription>
-                  <span className="font-mono font-bold">{err.pin}</span>
-                  {' — '}{err.message}
-                </AlertDescription>
-              </Alert>
-            ))}
-            {/* 경고 목록 */}
-            {result.warnings.map((w, i) => (
-              <Alert key={i} className="border-yellow-400 bg-yellow-50">
-                <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                <AlertDescription className="text-yellow-800">{w}</AlertDescription>
-              </Alert>
-            ))}
-            {/* 통과 핀 목록 */}
-            <div className="flex flex-wrap gap-2">
-              {result.passed_pins?.map(p => (
-                <Badge key={p} variant="outline"
-                       className="border-green-400 text-green-700">
-                  ✓ {p}
-                </Badge>
-              ))}
-            </div>
-            {/* 다음 단계 버튼 (PASS만) */}
-            {result.status === 'PASS' && (
-              <Button className="w-full bg-green-600 hover:bg-green-700"
-                      onClick={() => navigate(`/project/${id}/step2`)}>
-                Step 2 — CubeMX 코드 생성 →
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  )
-}
 C-5. Docker Compose 전체 구성
 
 # docker-compose.yml (DGX Spark 배포용)
@@ -997,7 +674,7 @@ services:
     volumes:
       - /workspace/models:/workspace/models:ro
       - /workspace/golden_modules:/workspace/golden_modules:ro
-      - ./sessions:/workspace/sessions   # 세션별 생성 파일
+      - ./sessions:/workspace/sessions
     depends_on: [ollama, qdrant]
 
   ollama:
@@ -1020,26 +697,18 @@ services:
       - "6333:6333"
     volumes:
       - ./qdrant_storage:/qdrant/storage
-
-  tensorboard:               # 학습 모니터링
-    image: tensorflow/tensorflow:latest
-    ports:
-      - "6006:6006"
-    volumes:
-      - /workspace/models/logs:/logs
-    command: tensorboard --logdir=/logs --host=0.0.0.0
 C-6. 웹 개발 단계별 프로세스
 
 Phase 1 — MVP (Streamlit, 2~3주)
 
 Week 1:
   - FastAPI 백엔드 기본 구조 (3 엔드포인트)
-  - 핀 검증 규칙 엔진 연결
-  - CubeMX CLI 자동화 연결
+  - 3계층 규칙 엔진 연결
+  - CubeMX CLI 자동화 연결 (4단계 워크플로우)
 
 Week 2:
   - Streamlit 화면 구성 (Step 1~3)
-  - Ollama 모델 API 연결
+  - Ollama 모델 API 연결 (Gemma 4 31B + 26B)
   - 파일 업로드 / 다운로드
 
 Week 3:
@@ -1058,16 +727,16 @@ Week 1~2:  프로젝트 초기 설정
 
 Week 3~4:  핵심 화면 개발
   - 대시보드 (프로젝트 목록 / 이력)
-  - Step 1: 드래그앤드롭 CSV 업로드 + 실시간 검증 결과
-  - Step 2: CubeMX 진행 상태 표시 (진행 바)
+  - Step 1: 드래그앤드롭 CSV 업로드 + 3계층 실시간 검증 결과
+  - Step 2: CubeMX 4단계 진행 상태 표시
 
 Week 5~6:  Step 3 + 결과 화면
-  - Step 3: 모듈 선택 UI + 코드 생성 스트리밍 (실시간 타이핑 효과)
+  - Step 3: 모듈 선택 UI + 코드 생성 스트리밍
   - 결과 화면: 코드 뷰어 (Monaco Editor) + ZIP 다운로드
   - 프로젝트 이력 저장
 
 Week 7:  사내 인증 + 배포
-  - 사내 LDAP/AD 연동 (또는 간단한 계정 관리)
+  - 사내 LDAP/AD 연동
   - Nginx + HTTPS 설정
   - Docker Compose 최종 배포
 
@@ -1075,30 +744,3 @@ Week 8:  사용자 테스트 + 개선
   - HW/FW 엔지니어 전체 대상 테스트
   - 피드백 반영
   - 운영 가이드 문서 작성
-화면별 주요 기능 요약
-
-화면	주요 기능	핵심 UX
-대시보드	최근 프로젝트, 빠른 시작 버튼	카드 그리드, 상태 배지
-Step 1	CSV 드래그앤드롭, 요구사항 폼, 검증 결과	PASS=초록/FAIL=빨강 즉시 표시
-Step 2	자동 진행 바, 생성 파일 트리 미리보기	스핀 애니메이션, 파일 클릭 미리보기
-Step 3	모듈 선택 체크박스, 코드 스트리밍	Monaco Editor 실시간 타이핑
-결과	코드 전체 뷰어, 탭 파일 전환, ZIP 다운로드	신택스 하이라이팅 (C 언어)
-C-7. 개발 우선순위 체크리스트
-
-[MVP — 즉시 시작 가능]
-  □ FastAPI 기본 서버 구성
-  □ /api/v1/validate 엔드포인트 (규칙 엔진 연결)
-  □ /api/v1/generate 엔드포인트 (CubeMX CLI 연결)
-  □ /api/v1/integrate 엔드포인트 (Ollama 연결)
-  □ Streamlit Step 1~3 화면
-  □ Docker Compose 단일 명령 배포
-
-[프로덕션 — Phase 2]
-  □ React + Next.js 프로젝트 세팅
-  □ Step 1 드래그앤드롭 + 실시간 검증 UI
-  □ Step 2 진행 상태 WebSocket
-  □ Step 3 코드 스트리밍 + Monaco Editor
-  □ 프로젝트 이력 저장 (SQLite 또는 PostgreSQL)
-  □ 파일 다운로드 (ZIP)
-  □ 사내 인증 연동
-  □ HTTPS + Nginx 배포

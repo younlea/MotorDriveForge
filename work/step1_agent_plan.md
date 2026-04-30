@@ -18,43 +18,90 @@
 
 ---
 
-## 2. 수집해야 하는 데이터 가이드 (디렉토리 구조 기반)
+## 2. 수집 데이터 현황 (2026-04-27 기준)
 
-향후 모델 학습 시 데이터의 출처를 쉽게 추적할 수 있도록, 디렉토리 구조에 맞추어 수집 방식(자동/수동/Git)을 체계적으로 분류했습니다.
+실제 `dataset/` 디렉토리에 수집·배치된 데이터 현황입니다.
 
 ```text
 dataset/
-├── official_docs/   (📌 수동 다운로드 - ST 캡차 정책 우회용)
-│   ├── 하드웨어_데이터시트_및_가이드/ (RM0440, Datasheet, AN5031)
-│   ├── 아날로그_통신_특화/ (AN5306, AN5346, AN5348, AN3070)
-│   └── 모터구동_FOC_특화/ (UM2392, AN5166, EVSPIN32G4-DUAL 회로도)
-├── forum_qa/        (📌 스크립트 자동/수동 기록)
-│   └── st_forum_qa.jsonl (ST 포럼 질의응답 및 에러 사례 스크래핑 결과)
-└── opensource/      (📌 자동 Git Clone 완료 - 완벽한 정답 레퍼런스)
-    ├── Arduino-FOC/ (STM32G4 포팅된 SimpleFOC 소스)
-    ├── flatmcu/     (STM32G473CB 기반 완전 공개 FOC 장비 KiCad 회로도)
-    └── stm32-esc/   (B-G431B-ESC1 펌웨어 최적화 코드)
+├── official_docs/          ← ✅ 14건 수집 완료 (55MB, flat 구조)
+│   ├── rm0440-stm32g4-series-*.pdf                (39MB, 레퍼런스 매뉴얼)
+│   ├── stm32g474re.pdf                            (3MB, 데이터시트)
+│   ├── dm00445657-getting-started-*.pdf            (4.3MB, HW 개발 가이드 AN5031)
+│   ├── an5306-operational-amplifier-*.pdf          (907KB, OPAMP 전류 센싱)
+│   ├── an5346-stm32g4-adc-*.pdf                   (201KB, ADC 최적화)
+│   ├── an5348-fdcan-*.pdf                          (888KB, FDCAN 가이드)
+│   ├── an3070-managing-the-driver-*.pdf            (194KB, RS-485 DE핀)
+│   ├── evspin32g4-dual-schematics.pdf             (299KB, 다축 레퍼런스 회로도)
+│   ├── evspin32g4-dual.pdf                         (1.2MB, 평가보드 매뉴얼)
+│   ├── evspin32g4-dual-bom.pdf                     (197KB, BOM)
+│   ├── evspin32g4-dual-manufacturing.zip           (645KB, 제조 데이터)
+│   ├── um3027-*.pdf                                (3.9MB, MCSDK v6 Workbench)
+│   ├── um3016-*.pdf                                (1.2MB, MCSDK v6 Profiler)
+│   └── 64361889.pdf                                (1.2MB, 추가 문서)
+│
+├── forum_qa/               ← ⬜ 수집 예정 (현재 0건)
+│   └── st_forum_qa.jsonl   (빈 파일, scripts/scrape_st_forum.py 실행 필요)
+│
+├── multi_motor/            ← ✅ 멀티모터 설계 가이드
+│   └── multi_motor_stm32g4_guide.md
+│
+└── opensource/             ← 8개 프로젝트 (2개 실파일, 6개 submodule 초기화 필요)
+    ├── flatmcu/            ✅ 73파일 (12MB) — STM32G473CB FOC KiCad 회로도
+    ├── STM32CubeG4/        ✅ 3,063파일 (43MB) — ST 공식 HAL 예제
+    ├── Arduino-FOC/        ⬜ submodule 등록 완료, git submodule update --init 필요
+    ├── stm32-esc/          ⬜ submodule 등록 완료, 초기화 필요
+    ├── moteus/             ⬜ submodule 등록 완료, 초기화 필요
+    ├── MESC_FOC_ESC/       ⬜ submodule 등록 완료, 초기화 필요
+    ├── bldc_vesc/          ⬜ submodule 등록 완료, 초기화 필요
+    └── ODriveHardware/     ⬜ submodule 등록 완료, 초기화 필요
 ```
 
-### [📁 dataset/official_docs/] (수동 다운로드 필요)
-ST 홈페이지의 방화벽(HTTP/2 셧다운)을 피해, 로컬 PC 브라우저에서 아래 링크들을 클릭해 수동으로 다운로드하고 폴더에 정리합니다.
-- **하드웨어 기초**: [RM0440](https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) / [G474 Datasheet](https://www.st.com/resource/en/datasheet/stm32g474re.pdf) / [AN5031(HW가이드)](https://www.st.com/resource/en/application_note/dm00445657-getting-started-with-stm32g4-series-hardware-development-stmicroelectronics.pdf)
-- **아날로그 / 통신 (모터 핵심)**: [AN5306(OPAMP)](https://www.google.com/search?q=ST+AN5306+pdf) / [AN5346(ADC)](https://www.google.com/search?q=ST+AN5346+pdf) / [AN5348(FDCAN)](https://www.google.com/search?q=ST+AN5348+pdf) / [AN3070(RS485)](https://www.google.com/search?q=ST+AN3070+pdf)
-- **FOC 제어 / 레퍼런스**: [UM3026 및 UM3027 (SDK v6 튜닝/보드 설정 통합 공식 문서 페이지)](https://www.st.com/en/embedded-software/x-cube-mcsdk.html#documentation) / [EVSPIN32G4 다축 회로도 (ST 로그인 필수/CAD Resources 탭)](https://www.st.com/en/evaluation-tools/evspin32g4-dual.html#cad-resources)
+### [📁 dataset/official_docs/] ✅ 14건 수집 완료
+ST 서버 HTTP/2 차단으로 인해 로컬 PC 브라우저에서 수동 다운로드하여 배치 완료.
+파일명은 ST 원본 그대로 유지됨 (하위 폴더 분류 없이 flat 구조).
 
-### [📁 dataset/forum_qa/] (자동 스크립트 기반/수동 대체)
-- `scripts/scrape_st_forum.py` 커스텀 스크립트를 통해 에러 실패 사례를 JSONL(`st_forum_qa.jsonl`) 형식으로 자동 구축합니다. 
-- (※ ST 커뮤니티 구조 변경으로 IP가 차단될 경우, 크롬 브라우저에서 찾은 에러 사례를 텍스트 파일로 해당 폴더에 수동으로 저장하여 보강합니다.)
+**수집 완료 문서 분류:**
+| 분류 | 파일 | 용도 |
+|------|------|------|
+| 레퍼런스 매뉴얼 | rm0440-*.pdf | AF 핀맵, 타이머, ADC, OPAMP 전체 스펙 |
+| 데이터시트 | stm32g474re.pdf | 핀 전기적 특성, 패키지 |
+| HW 가이드 | dm00445657-*.pdf (AN5031) | 전원, 디커플링, 부트 회로 설계 |
+| OPAMP | an5306-*.pdf | 전류 센싱, PGA 설정 |
+| ADC | an5346-*.pdf | ADC 최적화, 충돌 방지 |
+| FDCAN | an5348-*.pdf | FDCAN 핀/클럭 주의사항 |
+| RS-485 | an3070-*.pdf | DE핀 하드웨어 제어 |
+| 평가보드 | evspin32g4-dual*.pdf/zip | 다축 모터 레퍼런스 설계 (회로도+BOM+제조) |
+| MCSDK | um3027-*.pdf, um3016-*.pdf | Motor Control SDK 워크벤치/프로파일러 |
 
-### [📁 dataset/opensource/] (자동 Git Clone 완료 ✅)
-단순한 문서를 넘어, 실제 컴파일 시 작동이 보증된 "정답지" 소스코드와 회로도 네트리스트가 포진된 결정적 디렉토리입니다. 로컬 Git Submodule로 이미 다운로드 연동이 완료되었습니다.
-- **[Arduino-FOC]**: 다양한 환경에 포팅 가능한 STM32G4 핀 할당의 가장 범용적인 지침을 제공.
-- **[flatmcu]**: STM32G473CB 기반 완전 공개 모델. 하드웨어 네트리스트 검증을 위해 KiCad 데이터를 파인튜닝 데이터로 변환하여 주입.
-- **[stm32-esc]**: B-G431B-ESC1 보드 맞춤형 최적화 로직 및 주변 레지스터 세팅 추출용 데이터.
-- **[moteus (mjbots)]**: 고성능 로봇 보행 및 정밀 로봇 관절 제어를 위한 세계 규격의 STM32G4 액추에이터 레퍼런스.
-- **[MESC_FOC_ESC]**: 하이엔드 드론 및 모빌리티 모터 구동 펌웨어로, 대전력 설계 시 핀 충돌 회피 규칙을 배웁니다.
-- **[VESC (bldc)]**: 전 세계에서 가장 유명한 오픈소스 모터 스피드 컨트롤러(ESC). 다양한 모터 토폴로지의 절대적인 표준 레퍼런스로 활용됩니다.
-- **[ODriveHardware]**: 글로벌 산업 표준으로 쓰이는 ODrive 모터 제어기의 하드웨어 회로도 원본 파일로, 완벽한 FOC 아날로그 결선 규칙을 학습합니다.
+**추가 수집 권장 (미수집):**
+- AN5789 (Bootstrap 회로 설계) — 아직 미수집
+- AN4277 (PWM 셧다운 보호) — 아직 미수집
+- AN4539 (HRTIM cookbook) — 아직 미수집
+- Errata Sheet ES0430 — 아직 미수집
+
+### [📁 dataset/forum_qa/] ⬜ 수집 예정
+- `scripts/scrape_st_forum.py` 스크립트 준비 완료, 실행 필요.
+- `st_forum_qa.jsonl` 현재 빈 파일 (0건).
+- 인터넷 연결된 PC에서 실행 후 DGX Spark로 복사 필요.
+
+### [📁 dataset/opensource/] 8개 프로젝트
+
+**✅ 실파일 다운로드 완료 (핵심 2개):**
+- **flatmcu** (73파일, 12MB): STM32G473CB 기반 완전 공개 FOC 컨트롤러. KiCad 회로도(`design/flatmcu.kicad_sch`, `ThreePhaseBridge.sch`) + BOM 포함. 3상 브릿지, 게이트 드라이버, 3-션트 전류센싱 실제 구현.
+- **STM32CubeG4** (3,063파일, 43MB): ST 공식 HAL 드라이버 예제. HRTIM 파형생성, TIM BreakAndDeadtime, ADC 보정/주입채널, OPAMP 타이머 제어 먹스, FDCAN 통신, CORDIC Sin/Cos DMA 등 핵심 주변장치 예제 전체 포함.
+
+**⬜ Git Submodule 등록 완료, 초기화 필요 (6개):**
+```bash
+# 한 번에 전부 초기화
+git submodule update --init --recursive
+```
+- **Arduino-FOC**: SimpleFOC, STM32G4 하드웨어 레이어 + 다양한 환경 포팅 핀 할당 지침.
+- **stm32-esc**: B-G431B-ESC1 보드 맞춤형 최적화 레지스터 세팅.
+- **moteus (mjbots)**: 고정밀 로봇 관절 제어 STM32G4 액추에이터 레퍼런스.
+- **MESC_FOC_ESC**: 하이엔드 드론/모빌리티 대전력 설계, 핀 충돌 회피 규칙.
+- **VESC (bldc)**: 전 세계 표준 오픈소스 ESC, 다양한 모터 토폴로지 레퍼런스.
+- **ODriveHardware**: 글로벌 산업 표준 FOC 아날로그 결선 규칙 하드웨어 회로도.
 
 ---
 
