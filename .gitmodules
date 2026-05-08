@@ -15,4 +15,4 @@
 	url = https://github.com/simplefoc/Arduino-FOC.git
 [submodule "dataset/opensource/stm32-esc"]
 	path = dataset/opensource/stm32-esc
-	url = https://github.com/SimpleFOC/Arduino-FOC-drivers.git
+	url = https://github.com/younlea/stm32-esc.git
