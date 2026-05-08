@@ -10,3 +10,9 @@
 [submodule "dataset/opensource/ODriveHardware"]
 	path = dataset/opensource/ODriveHardware
 	url = https://github.com/odriverobotics/ODriveHardware
+[submodule "dataset/opensource/Arduino-FOC"]
+	path = dataset/opensource/Arduino-FOC
+	url = https://github.com/simplefoc/Arduino-FOC.git
+[submodule "dataset/opensource/stm32-esc"]
+	path = dataset/opensource/stm32-esc
+	url = https://github.com/SimpleFOC/Arduino-FOC-drivers.git
