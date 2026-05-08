@@ -13,6 +13,4 @@
 [submodule "dataset/opensource/Arduino-FOC"]
 	path = dataset/opensource/Arduino-FOC
 	url = https://github.com/simplefoc/Arduino-FOC.git
-[submodule "dataset/opensource/stm32-esc"]
-	path = dataset/opensource/stm32-esc
-	url = git@github.com:younlea/stm32-esc.git
+
