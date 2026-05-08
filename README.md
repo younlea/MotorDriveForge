@@ -126,16 +126,21 @@ git submodule update --init --recursive   # 오픈소스 6개 프로젝트 다�
 ```bash
 pip install pdfplumber sentence-transformers qdrant-client rank_bm25 tqdm
 
-# PDF → 텍스트
+# [소스 1] ST 공식 PDF → 텍스트
 python scripts/parse_pdfs.py
 
-# 청킹
+# [소스 1] PDF 텍스트 → 청킹
 python scripts/chunk_docs.py
+
+# [소스 2] 오픈소스 핀 연결 정보 추출 → 청킹
+#   STM32CubeG4 .ioc (117개) + stm32-esc pinmap + moteus pinout
+#   + VESC hwconf + flatmcu KiCad netlist → dataset/chunks/opensource_pin_chunks.jsonl
+python scripts/parse_opensource_code.py
 
 # Qdrant 실행 (Docker)
 docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
 
-# 임베딩 → Qdrant 적재
+# 임베딩 → Qdrant 적재 (PDF 청크 + 오픈소스 핀 청크 동시 처리)
 python scripts/embed_and_index.py
 
 # BM25 인덱스
