@@ -1,83 +1,193 @@
-STM32G4 Agent — Claude Code 컨텍스트
+# CLAUDE.md — MotorDriveForge 작업 가이드
 
-이 파일은 Claude Code가 세션 시작 시 자동으로 읽는 프로젝트 컨텍스트입니다.
+이 파일은 Claude Code가 이 저장소에서 작업할 때 참고하는 컨텍스트 문서입니다.
+새 작업을 시작하기 전에 항상 이 문서와 `ARCHITECTURE.md`를 먼저 읽어주세요.
 
-프로젝트 개요
+---
 
-STM32G4 전용 사내 Agent 시스템. HW 개발자가 회로도를 올리면 → 3계층 HW 설계 검증 → CubeMX 코드 생성 → 알고리즘 통합까지 자동화.
+## 프로젝트 한 줄 요약
 
-운영 환경: NVIDIA DGX Spark 128GB, 외부망 차단 완전 로컬.
-타겟 칩: STM32G4 계열만 (G431, G474 등).
-Golden Module: 오픈소스 FOC 코드 기반 (Arduino-FOC, MESC, VESC, ODrive, moteus, flatmcu). 향후 사내 코드 확보 시 교체 예정.
+STM32G4 모터 드라이버 회로를 검토하고, 통과 시 CubeMX로 펌웨어 프로젝트까지 자동 생성하는 사내 에이전트. 완전 로컬(외부망 차단), DGX Spark 128GB에서 동작.
 
-3-Step 파이프라인 (확정된 아키텍처)
+## 운영 환경
 
-[입력] 핀맵 CSV  +  자연어 프롬프트
-         ↓
-[STEP 1] HW 설계 검증 Agent
-         - 모델: Gemma 4 31B Dense (Q4_K_M, ~20GB, Ollama)
-         - 자연어 프롬프트 파싱 → 요구사항 구조화
-         - 3계층 검증: ① 인프라(VDD,BOOT0,SWD) ② 모터논리(상보PWM) ③ 페리페럴(ADC,FDCAN)
-         - CubeMX XML DB + RAG + 규칙 엔진으로 핀 AF 검증
-         - 출력: 검증 리포트 + 확정 핀 JSON
-         ↓
-[검증 게이트]  errors[] == [] ?
-         - FAIL → 완전 차단, 오류 리포트 반환, 회로도 수정 요구
-         - warnings → 표시 후 통과 허용
-         ↓ PASS only
-[STEP 2] CubeMX 자동화 (4단계 워크플로우)
-         - [2-1] .ioc 템플릿 수정 (Python 정규식)
-         - [2-2] CubeMX Headless CLI 실행
-         - [2-3] LLM 스니펫 → USER CODE BEGIN/END 주입
-         - [2-4] ZIP 패키징
-         - 출력: HAL 초기화 코드 + 기본 구동 스니펫
-         ↓
-[STEP 3] 알고리즘 통합 Agent
-         - 모델: Gemma 4 26B MoE (Q8, ~22GB, Ollama, Active ~4B)
-         - Golden Module RAG → 요구사항에 맞는 모듈 선택
-         - USER CODE BEGIN/END 영역에 FOC 알고리즘 삽입
-         - 출력: 완성 펌웨어 (.zip 다운로드)
-메모리: 20GB + 22GB = ~42GB → 128GB에서 두 모델 동시 로드 가능 (큰 여유).
+- **하드웨어**: NVIDIA DGX Spark 128GB 통합 메모리, 외부망 차단
+- **타겟 칩**: STM32G431 / G471 / G474 / G491 / G4A1
+- **모델 서빙**: Ollama (로컬), Gemma 4 31B + 26B 동시 상주
+- **벡터 DB**: Qdrant (Docker)
+- **백엔드**: FastAPI, **프론트**: Streamlit (MVP) → React (추후)
 
-Step 1 입력 방식 (2026-04-10 확정)
+---
 
-입력 1: 핀맵 CSV (chip, pin, function, label 컬럼)
-입력 2: 자연어 프롬프트 (HW 개발자가 자유 작성, JSON 아님)
-프롬프트 예시:
+## 핵심 아키텍처 원칙 (반드시 지킬 것)
 
-STM32G474RET6 칩을 쓸 거고, 외부 크리스탈 24MHz / 시스템 170MHz야.
-BLDC 모터 1개를 FOC로 제어할 건데 증분형 엔코더(A/B/Z)로 각도 읽고,
-3상 6채널 PWM으로 인버터 구동해. 데드타임 500ns, 전류는 내부 OPAMP.
-통신은 FDCAN 1Mbps 쓰고, 파라미터 저장용으로 SPI EEPROM도 연결할 거야.
-프롬프트 포함 권장 항목: 칩명·클럭 / 모터종류·제어방식 / 피드백센서 / PWM채널·데드타임 / 통신프로토콜 / 외부장치
+### 1. 결정론과 LLM의 분업
+- **결정론적 위반은 Rule Engine이 단독 처리** — 핀 충돌, AF 미존재, BDTR 미지원 등
+- **LLM은 판단형/모호한 항목에만** — 디커플링 권고, CPU 부하 여유, 트레이드오프
+- LLM이 결정론적 검증을 대체하면 안 됨 (재현성 망가짐)
 
-주요 파일
+### 2. RAG는 LLM의 입력을 보강하는 용도
+- RAG가 단독으로 답을 만들지 않음
+- Hybrid RAG(BGE-M3 + BM25) 결과는 **반드시 LLM 컨텍스트로 들어감**
+- LLM의 모든 주장은 `chunk_id` 인용 강제 (모더레이터가 검증)
 
-파일	설명
-stm32_agent_plan.md	메인 설계 계획 문서 (7차 수정)
-stm32_agent_appendex.md	데이터 수집 / 학습 방법 / 웹 개발 프로세스
-work/step1_agent_plan.md	Step 1 에이전트 상세 기획 (HW Expert Agent)
-work/step2_code_gen_plan.md	Step 2 코드 생성 파이프라인 상세 기획
-work/step1_workflow/	Step 1 구현 워크플로우 4단계
-work/step2_workflow/	Step 2 구현 워크플로우 4단계
-work/skills/	구현 스킬 (Python/Shell 스크립트)
-generate_ppt.py	PPT 자동 생성 스크립트 (python-pptx)
-인프라 & 기술 스택
+### 3. Step 1 데이터 의존성 (중요)
+```
+A Rule Engine ──┬─→ (errors+warnings 전체) ─→ C LLM Debate
+                └─→ (키워드) ──→ B RAG ──(Top-K 청크)─→ C LLM Debate
+                                                           ↑
+                            사용자 prompt + pinmap ─────────┘
+```
+A와 B는 병렬 아니고 **A → B → C 순차**, A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
 
-구분	선택	비고
-모델 서빙	Ollama + GGUF	두 모델 동시 로드
-Step 1 LLM	Gemma 4 31B Dense	Q4_K_M, ~20GB, 논리 추론
-Step 3 LLM	Gemma 4 26B MoE	Q8, ~22GB, Active ~4B, 코드 생성
-벡터 DB	Qdrant (Docker)	hybrid search
-임베딩	BAAI/bge-m3 + BM25 + cross-encoder	
-파인튜닝	Unsloth QLoRA	Step1: r=32 / Step3: r=64
-백엔드	FastAPI	검증 게이트: errors[]>0 → HTTP 403
-프론트 MVP	Streamlit	http://dgx-spark:8501
-프론트 Production	React 18 + TypeScript + Tailwind + shadcn/ui	
-배포	Docker Compose	nginx + frontend + backend + ollama + qdrant
-소통 원칙
+### 4. 운영 모드 2가지
+- `mode=fast`: Rule Engine만 실행, ERROR 즉시 반환 (CI/자동검증용)
+- `mode=full` (기본): A→B→C 전체 실행, ERROR 있어도 LLM이 자연어 설명 작성
 
-간결하게 답변. 장황한 설명 불필요.
-설계 변경 시 stm32_agent_plan.md와 PPT 동시 업데이트.
-구체적 수치/경로/예시 포함 (두리뭉실한 가이드 지양).
-HW 개발자 UX 우선 — 복잡한 포맷보다 자연어 입력 선호.
+### 5. Step 2는 LLM 호출 금지
+- CubeMX 자동화는 결정론적 영역. LLM 끼면 디버깅 지옥.
+- `.ioc` 편집, CLI 실행, 스니펫 주입, 패키징 — 모두 스크립트로만.
+
+### 6. Step 3는 Golden Module 우선
+- 검증된 C/H 레퍼런스(`golden_modules/`)에서 **검색** → **사용자 pinmap에 적응** → **USER CODE 마커 사이 주입**
+- LLM이 처음부터 코드를 새로 쓰지 않음. 적응 작업만.
+
+---
+
+## 디렉토리 구조와 책임
+
+```
+MotorDriveForge/
+├── agent/
+│   └── step1_review_agent.py      # ⭐ Step 1 핵심: A→B→C 오케스트레이션
+├── backend/
+│   └── main.py                     # FastAPI: /v1/review (mode 파라미터 추가 필요)
+├── golden_modules/                 # ⭐ Step 3 RAG 소스 (검증된 C/H)
+│   ├── dc_motor_pid.{c,h}
+│   ├── multi_axis_sync.{c,h}
+│   ├── bldc_6step_hall.{c,h}
+│   └── fdcan_motor_cmd.{c,h}
+├── scripts/                        # 오프라인 데이터 인제스천
+│   ├── parse_pdfs.py
+│   ├── chunk_docs.py
+│   ├── embed_and_index.py
+│   ├── build_bm25.py
+│   ├── parse_cubemx_xml.py
+│   ├── parse_opensource_code.py
+│   ├── scrape_st_forum.py
+│   └── scrape_ti_e2e.py            # 🆕 TODO
+├── dataset/
+│   ├── official_docs/              # ST PDFs (✅ 14건)
+│   ├── official_docs/errata/       # 🆕 G4 errata 명시적 분리
+│   ├── forum_qa/                   # ST + TI E2E
+│   ├── opensource/                 # submodules
+│   └── synthetic/                  # 🆕 합성 망가진 스키매틱
+├── work/                           # 워크플로우 기획 문서
+│   ├── step1_workflow/
+│   └── step2_workflow/
+├── ARCHITECTURE.md                 # ⭐ 시스템 다이어그램·모델·데이터
+├── CLAUDE.md                       # 이 파일
+└── todo.md                         # 작업 현황
+```
+
+---
+
+## 모델 매핑 (어디에 무슨 모델 쓰는지)
+
+| 위치 | 모델 | 비고 |
+|---|---|---|
+| Step 1 LLM Debate | Gemma 4 31B Dense (Q4_K_M) | 추론·자연어 파싱 |
+| Step 3 Codegen | Gemma 4 26B MoE (Q8) | 1차 |
+| Step 3 Codegen A/B | Qwen3-Coder 30B A3B | HAL 정확도로 비교 후 채택 |
+| RAG dense | BAAI/bge-m3 | 다국어 |
+| RAG sparse | rank_bm25 | TIM1_CH1N 같은 정확 매칭 |
+| 페르소나 | (Gemma 4 31B + system prompt × 5) | 별도 가중치 없음 |
+
+co-residency: 31B + 26B = ~42 GB < 128 GB ✓
+
+---
+
+## 5 페르소나 시스템 프롬프트 가이드
+
+각 페르소나는 자기 도메인의 관점에서만 발언. 모더레이터가 통합.
+
+1. **MCU/Periph Expert** — 핀 AF, 타이머/DMA/ADC 충돌, 클럭 트리, errata
+2. **Motor Control Expert** — 상보 PWM, 데드타임, BRK, 엔코더/홀 신호 무결성
+3. **Power/EMI Expert** — 디커플링, GND 플레인, 게이트 드라이버 부트스트랩, 감지 저항
+4. **Safety/Failsafe Expert** — 비상정지, 와치독, OCP/OVP/UVLO, FDCAN 끊김 대응
+5. **Moderator** — 충돌 의견 조정, 근거 없는 발언 기각, 최종 보고서 합의
+
+**중요**: 각 페르소나 발언에 `chunk_id` 인용 강제. 모더레이터가 검증.
+
+---
+
+## 작업할 때 주의사항
+
+### Do
+- 변경 전 `ARCHITECTURE.md`와 `CLAUDE.md` 먼저 읽기
+- Rule Engine 룰 추가 시 ERROR/WARNING 구분 명확히
+- LLM 프롬프트 수정 시 chunk_id 인용 강제 패턴 유지
+- Step 2 스크립트는 idempotent하게 (재실행 안전)
+- Golden Module 추가 시 README에 사용 예시 함께
+- 새로 만든 데이터 소스는 `dataset/` 하위 적절한 곳에
+
+### Don't
+- Step 2에 LLM 호출 추가하지 않음
+- Rule Engine을 LLM으로 대체하지 않음
+- ERROR로 분류해야 할 것을 WARNING으로 낮추지 않음
+- 외부 API 호출 추가하지 않음 (오프라인 운영)
+- pip install 시 requirements.txt 업데이트 누락하지 않음
+
+---
+
+## 개발 워크플로우
+
+```bash
+# 백엔드 개발 모드
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload --port 8000
+
+# 프론트엔드
+pip install -r frontend/requirements.txt
+streamlit run frontend/app.py
+
+# Qdrant 시작
+docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+
+# Ollama 모델 확인
+ollama list
+
+# 단위 테스트 (TODO: pytest 셋업 필요)
+pytest tests/
+
+# RAG 인덱스 재빌드 (오프라인, 데이터 추가 시에만)
+python scripts/parse_pdfs.py
+python scripts/chunk_docs.py
+python scripts/embed_and_index.py
+python scripts/build_bm25.py
+```
+
+---
+
+## 우선순위 작업 (ROI 순)
+
+1. **Step 1 mode=fast / mode=full 분리** — 빠른 차단 vs 풀 리뷰
+2. **TI E2E 포럼 크롤러** (`scripts/scrape_ti_e2e.py`) — 최고 ROI 데이터 소스
+3. **G4 errata 명시적 인제스천** — `dataset/official_docs/errata/` 분리
+4. **합성 망가진 스키매틱 파이프라인** (`scripts/mutate_evm.py`) — 12 mutation rules
+5. **5 페르소나 프롬프트 + 모더레이터** 구현 — 현재 단일 LLM 호출이면 분리
+6. **Qwen3-Coder vs Gemma 4 26B 벤치마크** (HAL 정확도)
+7. **사내 리뷰 자동 아카이브** — 장기 해자
+
+자세한 내용은 `tasks/` 하위 작업 명세 참조.
+
+---
+
+## 참고 문서
+
+- `ARCHITECTURE.md` — 다이어그램, 모델/데이터 카탈로그
+- `stm32_agent_plan.md` — 메인 설계 계획
+- `stm32_agent_appendex.md` — Appendix
+- `todo.md` — 진행 현황
+- `work/step1_workflow/` — Step 1 4단계 워크플로우 상세
+- `work/step2_workflow/` — Step 2 4단계 워크플로우 상세

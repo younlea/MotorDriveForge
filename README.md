@@ -5,6 +5,8 @@ STM32G4 전용 사내 Agent 시스템 — 회로도 입력부터 완성 펌웨�
 > 운영 환경: NVIDIA DGX Spark 128GB · 완전 로컬 (외부망 차단)
 > 타겟 칩: STM32G4 계열 (G431 / G471 / G474 / G491 / G4A1)
 
+**자세한 시스템 다이어그램, 모델 카탈로그, 데이터 소스:** [ARCHITECTURE.md](./ARCHITECTURE.md)
+
 ---
 
 ## 3-Step 파이프라인
@@ -298,3 +300,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 - [ ] Step 3 알고리즘 통합 에이전트 구현
 - [ ] React 18 프로덕션 UI (Streamlit MVP 이후)
 - [ ] QLoRA Fine-tuning (에러 사례 500건 수집 후)
+
+---
+
+## 기여 / 개발
+
+작업 단위 task 명세는 [`tasks/`](./tasks/) 디렉토리에 정리되어 있습니다.
+
+- 시작 전 [`CLAUDE.md`](./CLAUDE.md)와 [`ARCHITECTURE.md`](./ARCHITECTURE.md)를 먼저 읽어주세요.
+- Claude Code 사용 시 `tasks/<번호>_<제목>.md` 파일을 컨텍스트로 제공하세요.
+- 작업 우선순위와 의존성은 [`tasks/README.md`](./tasks/README.md) 참조.
