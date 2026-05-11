@@ -290,16 +290,26 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 ---
 
-## 남은 작업 (todo.md 참조)
+## 남은 작업 (Tasks & TODO)
 
+상세 작업 명세 및 우선순위는 [`tasks/README.md`](./tasks/README.md)와 [`todo.md`](./todo.md)에서 관리됩니다.
+
+### 🔴 최우선 진행 (Tasks)
+- [ ] [Task 01] Step 1 운영 모드 분리 (fast/full)
+- [ ] [Task 02] TI E2E 모터드라이버 포럼 크롤러 파이프라인 구축
+- [ ] [Task 03] STM32G4 Errata 명시적 인제스천 (RAG 품질 개선)
+- [ ] [Task 04] 합성 망가진 스키매틱 파이프라인 구축 (평가셋 확보)
+- [ ] [Task 05] 5 페르소나 토론 시스템
+
+### 🟡 일반 과제 (TODO)
 - [ ] Git submodule 6개 초기화 (`git submodule update --init --recursive`)
 - [ ] X-CUBE-MCSDK 설치 → `dataset/official_docs/cubemx_db/` XML 수집
-- [ ] ST 포럼 Q&A 수집 → forum_qa/st_forum_qa.jsonl
+- [ ] ST 포럼 Q&A 수집 마무리
 - [ ] 오픈소스 FOC 코드 → Golden Module 가공·등록
 - [ ] Step 2 CubeMX 자동화 (4단계 워크플로우 구현)
-- [ ] Step 3 알고리즘 통합 에이전트 구현
+- [ ] Step 3 알고리즘 통합 에이전트 구현 ([Task 06] 코드 생성 벤치마크 포함)
 - [ ] React 18 프로덕션 UI (Streamlit MVP 이후)
-- [ ] QLoRA Fine-tuning (에러 사례 500건 수집 후)
+- [ ] QLoRA Fine-tuning (에러 사례 수집 후)
 
 ---
 
