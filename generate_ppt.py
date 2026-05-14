@@ -236,8 +236,8 @@ footer(s, 4)
 # Step 박스 3개 (폭 좁혀서 게이트 공간 확보)
 steps = [
     ("STEP 1", "HW 설계 검증 Agent", BLUE,
-     ["회로도 입력\n(CSV + 자연어)", "CubeMX XML 핀 DB", "3계층 규칙 엔진", "STM32G4 RAG"],
-     "Gemma 4 31B Dense\n(~20GB)", "검증 완료\n핀 JSON"),
+     ["회로도 이미지\n(Vision 자동 분석)", "CubeMX XML 핀 DB", "3계층 규칙 엔진", "STM32G4 RAG"],
+     "Gemma 4 31B Dense\n(~20GB, Vision 겸용)", "검증 완료\n핀 JSON + Vision 분석"),
     ("STEP 2", "CubeMX 자동화", TEAL,
      [".ioc 파일 자동 생성", "CubeMX CLI 실행", "HAL 코드 출력"],
      "LLM 불필요\n(결정론적 처리)", "HAL 초기화 코드\n(main.c, tim.c ...)"),
@@ -456,15 +456,16 @@ phase_badge(s, "Phase 2", 0.4, 1.35, bg=TEAL)
 
 add_text(s, "구현 항목", 0.4, 1.85, 5.8, 0.38, size=15, bold=True, color=TEAL)
 impl_items = [
+    ("Vision 분석",  "Gemma 4 31B Multimodal: 회로도 이미지 → 핀맵 자동 추출 + 초기 분석"),
     ("3계층 규칙엔진", "① 인프라 ② 모터논리(상보PWM) ③ 페리페럴(ADC/OPAMP)"),
-    ("RAG 구성",   "PDF + 오픈소스 회로도 → 청킹 → BGE-M3 → Qdrant"),
-    ("LLM 연결",   "Gemma 4 31B Dense: 자연어 설명 + JSON 구조화 출력"),
-    ("UI 구성",    "Streamlit: 회로도 업로드 → 검증 진행 → 리포트 표시"),
+    ("RAG 구성",   "PDF + 오픈소스 회로도 → 청킹 → BGE-M3 → Qdrant (Vision 분석으로 쿼리 보강)"),
+    ("LLM 연결",   "Gemma 4 31B Dense: 자연어 설명 + JSON 구조화 출력 (Vision 분석 컨텍스트 포함)"),
+    ("UI 구성",    "Streamlit: 이미지 업로드 → Vision 분석 → 검증 리포트 + vision_analysis 표시"),
 ]
 for i, (label, desc) in enumerate(impl_items):
-    add_rect(s, 0.4, 2.3+i*0.72, 5.8, 0.65, fill=LIGHTTEAL)
-    add_text(s, label, 0.55, 2.34+i*0.72, 1.4, 0.3, size=12, bold=True, color=TEAL)
-    add_text(s, desc,  2.1,  2.34+i*0.72, 3.9, 0.55, size=12, color=BLACK)
+    add_rect(s, 0.4, 2.3+i*0.58, 5.8, 0.52, fill=LIGHTTEAL)
+    add_text(s, label, 0.55, 2.34+i*0.58, 1.6, 0.3, size=11, bold=True, color=TEAL)
+    add_text(s, desc,  2.3,  2.34+i*0.58, 3.7, 0.45, size=10.5, color=BLACK)
 
 add_text(s, "3계층 검증 항목", 6.8, 1.85, 6.1, 0.38, size=15, bold=True, color=TEAL)
 checks = [
@@ -720,8 +721,10 @@ for j, hdr in enumerate(["", "역할", "선택 모델", "양자화", "메모리"
     add_text(s, hdr, 0.45+j*2.08, 1.43, 2.0, 0.35, size=12, bold=True, color=WHITE)
 
 step_rows = [
+    ("Vision", "회로도 이미지\n→ 핀맵 추출", "Gemma 4 31B Dense", "Q4_K_M", "공유",
+     "Step 1과 동일 인스턴스 재사용 — 이미지 → pinmap CSV + 초기 분석 생성"),
     ("Step 1", "HW 검증\n(추론)", "Gemma 4 31B Dense", "Q4_K_M", "~20GB",
-     "논리 추론 정확도 최상급, JSON 구조화 출력 우수"),
+     "논리 추론 정확도 최상급, JSON 구조화 출력 우수 / Vision 분석 컨텍스트 포함"),
     ("Step 2", "CubeMX\n자동화", "LLM 불필요", "—", "0GB",
      "결정론적 코드 생성 — CubeMX CLI 직접 사용"),
     ("Step 3", "알고리즘\n통합", "Gemma 4 26B MoE", "Q8", "~22GB",
@@ -786,8 +789,8 @@ footer(s, 14)
 add_text(s, "전체 사용 흐름", 0.4, 1.45, 12.5, 0.38, size=15, bold=True, color=GREEN)
 
 guide_steps = [
-    ("①", "준비",           GREEN,  "회로도 핀맵\n작성 (CSV)"),
-    ("②", "핀 검증",        GREEN,  "Step 1 Agent\n실행"),
+    ("①", "준비",           GREEN,  "회로도 이미지\n또는 CSV 준비"),
+    ("②", "핀 검증",        GREEN,  "Step 1 Agent\n(Vision + 검증)"),
     ("③", "검증 게이트",    ORANGE, "PASS만\nStep 2 진행"),
     ("④", "HAL 코드 생성",  TEAL,   "Step 2\nCubeMX 자동화"),
     ("⑤", "알고리즘 통합",  GREEN,  "Step 3 Agent\n실행"),
@@ -813,25 +816,28 @@ add_text(s, "회로도 수정\n후 ① 재실행", 2.55, 3.68, 1.8, 0.52, size=1
 # 게이트 박스에서 아래로 화살표
 add_text(s, "↓", 3.35, 3.1, 0.35, 0.3, size=13, bold=True, color=RED, align=PP_ALIGN.CENTER)
 
-# 입력 포맷 안내
-add_text(s, "입력 파일 포맷 (CSV 예시)", 0.4, 3.3, 6.0, 0.38, size=14, bold=True, color=GREEN)
-csv_sample = """chip,STM32G474RET6
-hse_mhz,24
-sysclk_mhz,170
-
-pin,function,label
-PA8,TIM1_CH1,PWM_UH
-PA7,TIM1_CH1N,PWM_UL
-PA9,TIM1_CH2,PWM_VH
-PB0,TIM1_CH2N,PWM_VL
-PA10,TIM1_CH3,PWM_WH
-PB1,TIM1_CH3N,PWM_WL
-PA0,TIM2_CH1,ENC_A
-PA1,TIM2_CH2,ENC_B
-PB8,FDCAN1_RX,CAN_RX
-PB9,FDCAN1_TX,CAN_TX"""
-add_rect(s, 0.4, 3.72, 5.8, 3.35, fill=RGBColor(0x1E,0x1E,0x1E))
-add_text(s, csv_sample, 0.55, 3.77, 5.6, 3.25, size=11, color=RGBColor(0xCE,0xF5,0xB0))
+# 입력 포맷 안내 (이미지 우선)
+add_text(s, "입력 방식 (권장: 회로도 이미지)", 0.4, 3.3, 6.0, 0.38, size=14, bold=True, color=GREEN)
+# 이미지 입력 박스
+add_rect(s, 0.4, 3.72, 5.8, 1.1, fill=RGBColor(0x1E,0x1E,0x1E))
+add_rect(s, 0.4, 3.72, 5.8, 1.1, fill=None, line=TEAL, line_w=Pt(1.5))
+add_text(s, "방법 1 — 회로도 이미지 업로드 (JPEG/PNG)",
+         0.55, 3.76, 5.6, 0.28, size=10.5, bold=True, color=TEAL)
+add_text(s, "Gemma 4 31B Vision이 핀맵을 자동 추출 → 사용자 CSV 작성 불필요",
+         0.55, 4.05, 5.6, 0.25, size=10, color=RGBColor(0xCE,0xF5,0xB0))
+add_text(s, "schematic_v3.png  (드래그 or 클릭 업로드)",
+         0.55, 4.33, 5.6, 0.25, size=9.5, color=RGBColor(0x90,0xD0,0x90), italic=True)
+# CSV 직접 입력 박스
+add_rect(s, 0.4, 4.9, 5.8, 2.17, fill=RGBColor(0x1E,0x1E,0x1E))
+add_text(s, "방법 2 — CSV 직접 입력 (이미지 없을 때)",
+         0.55, 4.93, 5.6, 0.28, size=10.5, bold=True, color=RGBColor(0xAA,0xAA,0xAA))
+csv_sample_short = """chip,pin,function,label
+STM32G474RET6,PA8,TIM1_CH1,PWM_UH
+STM32G474RET6,PA7,TIM1_CH1N,PWM_UL
+STM32G474RET6,PB8,FDCAN1_RX,CAN_RX
+STM32G474RET6,PB9,FDCAN1_TX,CAN_TX
+...  (전체 핀 목록)"""
+add_text(s, csv_sample_short, 0.55, 5.22, 5.6, 1.78, size=10.5, color=RGBColor(0xCE,0xF5,0xB0))
 
 # 자연어 프롬프트 입력 가이드
 add_text(s, "기능 요구사항 — 자연어 프롬프트 입력", 6.8, 3.3, 6.1, 0.38, size=14, bold=True, color=GREEN)
@@ -860,17 +866,18 @@ add_text(s, "포함 권장: 칩명 · 클럭 · 모터종류/제어방식 · 피
 # 슬라이드 15 — 사용 가이드: Step 1
 # ══════════════════════════════════════════════════════════════
 s = prs.slides.add_slide(blank_layout)
-slide_header(s, "사용 가이드 ① — Step 1 : 핀 검증", subtitle="회로도 핀맵 CSV + 자연어 프롬프트 입력 → LLM 파싱 → 검증 리포트")
+slide_header(s, "사용 가이드 ① — Step 1 : 핀 검증",
+            subtitle="회로도 이미지 + 자연어 프롬프트 → Vision 분석 → Rule Engine + RAG + LLM → 검증 리포트")
 footer(s, 15)
 phase_badge(s, "사용 가이드", 0.4, 1.35, bg=GREEN, w=2.2)
 
 add_text(s, "실행 순서", 0.4, 1.85, 5.8, 0.35, size=14, bold=True, color=GREEN)
 steps_guide = [
     "1.  웹 UI 접속  (http://dgx-spark:3000)",
-    "2.  핀맵 CSV 파일 업로드 (회로도에서 추출)",
+    "2.  회로도 이미지 업로드 (JPEG/PNG — Vision이 핀맵 자동 추출)",
     "3.  기능 요구사항을 자연어로 입력 (프롬프트 가이드 참고)",
-    "4.  [핀 검증 실행] 버튼 클릭",
-    "5.  검증 결과 리포트 확인 (PASS / FAIL)",
+    "4.  [검증 실행] 버튼 클릭",
+    "5.  Vision 분석 결과 확인 → 검증 리포트 확인 (PASS / FAIL)",
 ]
 for i, step in enumerate(steps_guide):
     add_rect(s, 0.4, 2.28+i*0.5, 5.8, 0.46, fill=LIGHTGREEN if i%2==0 else WHITE)
@@ -1182,7 +1189,7 @@ add_text(s, "+  새 프로젝트 시작", CX+0.2, BTN_Y+0.05, 2.5, 0.28, size=11
 # 슬라이드 20 — GUI 예시 ② Step 1 핀 검증 화면
 # ══════════════════════════════════════════════════════════════
 s = prs.slides.add_slide(blank_layout)
-slide_header(s, "UI 화면 예시 ② — Step 1 핀 검증", subtitle="CSV 업로드 + 요구사항 JSON 입력 → 검증 결과 실시간 표시")
+slide_header(s, "UI 화면 예시 ② — Step 1 핀 검증", subtitle="회로도 이미지 업로드 + 자연어 프롬프트 → Vision 분석 → 검증 결과 실시간 표시")
 footer(s, 20)
 phase_badge(s, "UI 예시", 0.4, 1.35, bg=TEAL, w=1.8)
 
@@ -1222,14 +1229,14 @@ add_text(s, "STEP 1  |  핀 검증", CX+0.15, PY+0.1, 5.0, 0.3, size=13, bold=Tr
 # ── 왼쪽 패널: 입력 폼 ──────────────────────────
 LP_X, LP_W = CX+0.1, 4.8
 
-# ① CSV 업로드 존
-add_text(s, "1  핀맵 CSV 업로드", LP_X, PY+0.46, LP_W, 0.25, size=10, bold=True, color=NAVY)
+# ① 이미지 업로드 존 (주 입력)
+add_text(s, "1  회로도 이미지 업로드 (Vision 자동 분석)", LP_X, PY+0.46, LP_W, 0.25, size=10, bold=True, color=NAVY)
 add_rect(s, LP_X, PY+0.73, LP_W, 0.82, fill=WHITE)
-add_rect(s, LP_X, PY+0.73, LP_W, 0.82, fill=None, line=RGBColor(0x90,0xB4,0xCC), line_w=Pt(1.2))
-add_text(s, "[  ]", LP_X+2.1, PY+0.8, 0.6, 0.28, size=14, color=_MUT, align=PP_ALIGN.CENTER)
-add_text(s, "CSV 파일을 드래그하거나 클릭하여 업로드", LP_X+0.2, PY+1.07, LP_W-0.4, 0.2, size=8.5, color=_MUT, align=PP_ALIGN.CENTER)
-add_text(s, "pinmap_BLDC_v2.csv  (업로드 완료 ✓)", LP_X+0.2, PY+1.27, LP_W-0.4, 0.2, size=8.5, bold=True, color=GREEN, align=PP_ALIGN.CENTER)
-add_rect(s, LP_X, PY+0.73, LP_W, 0.82, fill=None, line=GREEN, line_w=Pt(1.0))
+add_rect(s, LP_X, PY+0.73, LP_W, 0.82, fill=None, line=TEAL, line_w=Pt(1.2))
+add_text(s, "[IMG]", LP_X+2.05, PY+0.8, 0.7, 0.28, size=12, color=TEAL, align=PP_ALIGN.CENTER, bold=True)
+add_text(s, "회로도 이미지를 드래그하거나 클릭하여 업로드 (JPEG/PNG)", LP_X+0.12, PY+1.07, LP_W-0.25, 0.2, size=8.5, color=_MUT, align=PP_ALIGN.CENTER)
+add_text(s, "schematic_bldc_v3.png  (업로드 완료 ✓  →  Vision 분석 예정)", LP_X+0.12, PY+1.27, LP_W-0.25, 0.2, size=8.5, bold=True, color=TEAL, align=PP_ALIGN.CENTER)
+add_rect(s, LP_X, PY+0.73, LP_W, 0.82, fill=None, line=TEAL, line_w=Pt(1.0))
 
 # ② 자연어 프롬프트 입력
 add_text(s, "2  기능 요구사항 입력 (자연어)", LP_X, PY+1.64, LP_W, 0.25, size=10, bold=True, color=NAVY)
