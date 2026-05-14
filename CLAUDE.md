@@ -33,12 +33,16 @@ STM32G4 모터 드라이버 회로를 검토하고, 통과 시 CubeMX로 펌웨�
 
 ### 3. Step 1 데이터 의존성 (중요)
 ```
-A Rule Engine ──┬─→ (errors+warnings 전체) ─→ C LLM Debate
+회로도 이미지 ─→ [Vision] Gemma 4 31B Multimodal
+                    │ pinmap 추출 + 초기 분석
+                    ↓
+A Rule Engine ──┬─→ (errors+warnings 전체) ─→ C LLM Debate ←─ Vision 초기 분석
                 └─→ (키워드) ──→ B RAG ──(Top-K 청크)─→ C LLM Debate
-                                                           ↑
-                            사용자 prompt + pinmap ─────────┘
+                                  ↑ Vision 분석도 쿼리 보강
+                            사용자 prompt + pinmap ─────────────┘
 ```
-A와 B는 병렬 아니고 **A → B → C 순차**, A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
+**Vision → A → B → C 순차**. 이미지 없으면 CSV 직접 입력 → A부터 시작.
+A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
 
 ### 4. 운영 모드 2가지
 - `mode=fast`: Rule Engine만 실행, ERROR 즉시 반환 (CI/자동검증용)

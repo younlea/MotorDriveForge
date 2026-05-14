@@ -1,6 +1,13 @@
 """
 Streamlit MVP UI — STM32G4 Motor Drive Agent
 HW 개발자용 3-Step 파이프라인 인터페이스
+
+입력 흐름:
+  회로도 이미지 + 자연어 프롬프트
+      → Gemma 4 31B Vision 분석 (핀맵 자동 추출)
+      → Rule Engine + Hybrid RAG
+      → LLM Persona Debate
+      → 검증 리포트
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import requests
 import streamlit as st
+from io import StringIO
 
 # ---------------------------------------------------------------------------
 # 설정
@@ -70,14 +78,16 @@ st.set_page_config(
 # Session state 초기화
 # ---------------------------------------------------------------------------
 
-if "review_passed" not in st.session_state:
-    st.session_state.review_passed = False
-if "validated_pins" not in st.session_state:
-    st.session_state.validated_pins = {}
-if "ioc_result" not in st.session_state:
-    st.session_state.ioc_result = None
-if "last_report" not in st.session_state:
-    st.session_state.last_report = None
+for key, default in [
+    ("review_passed", False),
+    ("validated_pins", {}),
+    ("ioc_result", None),
+    ("last_report", None),
+    ("vision_analysis", ""),
+    ("extracted_csv", ""),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +145,7 @@ with st.sidebar:
     st.write("⚪ Step 3: 알고리즘 통합")
 
     st.divider()
-    st.caption("MotorDriveForge v1.0")
+    st.caption("MotorDriveForge v2.0")
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +153,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 st.title("STM32G4 Motor Drive Agent")
-st.caption("핀맵 CSV + 자연어 프롬프트 → 검증 → HAL 코드 → 알고리즘 통합")
+st.caption("회로도 이미지 + 자연어 프롬프트 → Vision 분석 → 핀 검증 → HAL 코드 → 알고리즘 통합")
 
 tab1, tab2, tab3 = st.tabs(["Step 1  핀 검증", "Step 2  코드 생성", "Step 3  알고리즘 통합"])
 
@@ -154,60 +164,80 @@ tab1, tab2, tab3 = st.tabs(["Step 1  핀 검증", "Step 2  코드 생성", "Step
 
 with tab1:
     st.header("Step 1 — 핀 검증")
-    st.caption("핀맵 CSV와 자연어 요구사항을 입력하면 STM32G4 전문 Agent가 핀 AF, 충돌, 리소스를 검증합니다.")
+    st.caption(
+        "회로도 이미지를 올리면 Gemma 4 31B가 핀맵을 자동 추출합니다. "
+        "핀맵 CSV를 직접 넣을 수도 있습니다."
+    )
 
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
-        # 칩 선택
         chip = st.selectbox("칩 선택", CHIPS, index=1)
 
-        # CSV 입력 방식
-        csv_mode = st.radio("CSV 입력 방식", ["파일 업로드", "직접 입력"], horizontal=True)
+        st.subheader("입력 방식")
 
-        csv_text: Optional[str] = None
-        csv_file = None
+        # ── 이미지 업로드 (주 입력) ────────────────────────────────────────
+        st.markdown("**회로도 이미지** (권장 — Gemma 4 31B Vision 자동 분석)")
+        schematic_image = st.file_uploader(
+            "회로도 이미지 업로드",
+            type=["jpg", "jpeg", "png", "bmp", "webp"],
+            help="JPEG/PNG 형식 회로도. Gemma 4 31B가 핀맵을 자동 추출합니다.",
+            label_visibility="collapsed",
+        )
+        if schematic_image:
+            st.image(schematic_image, caption="업로드된 회로도", use_container_width=True)
 
-        if csv_mode == "파일 업로드":
-            uploaded = st.file_uploader(
-                "핀맵 CSV 업로드",
-                type=["csv"],
-                help="chip, pin, function, label 컬럼 필수",
+        st.divider()
+
+        # ── CSV 보조 입력 ──────────────────────────────────────────────────
+        with st.expander("핀맵 CSV 직접 입력 (선택 — 이미지 없을 때 필수)", expanded=not bool(schematic_image)):
+            csv_input_mode = st.radio(
+                "CSV 입력 방식", ["파일 업로드", "직접 입력"], horizontal=True, key="csv_mode"
             )
-            if uploaded:
-                csv_file = uploaded
-                # 미리보기
-                try:
-                    df = pd.read_csv(uploaded)
-                    uploaded.seek(0)
-                    st.dataframe(df.head(10), use_container_width=True)
-                    st.caption(f"총 {len(df)}개 핀")
-                except Exception as e:
-                    st.error(f"CSV 파싱 오류: {e}")
-        else:
-            csv_text = st.text_area(
-                "CSV 직접 입력",
-                value=EXAMPLE_CSV.strip(),
-                height=200,
-                help="chip,pin,function,label 헤더 포함",
-            )
-            if csv_text:
-                try:
-                    from io import StringIO
-                    df_preview = pd.read_csv(StringIO(csv_text))
-                    st.dataframe(df_preview.head(10), use_container_width=True)
-                    st.caption(f"총 {len(df_preview)}개 핀")
-                except Exception:
-                    pass
+
+            csv_text: Optional[str] = None
+            csv_file = None
+
+            if csv_input_mode == "파일 업로드":
+                uploaded = st.file_uploader(
+                    "핀맵 CSV 파일",
+                    type=["csv"],
+                    help="chip, pin, function, label 컬럼 필수",
+                    key="csv_uploader",
+                )
+                if uploaded:
+                    csv_file = uploaded
+                    try:
+                        df = pd.read_csv(uploaded)
+                        uploaded.seek(0)
+                        st.dataframe(df.head(10), use_container_width=True)
+                        st.caption(f"총 {len(df)}개 핀")
+                    except Exception as e:
+                        st.error(f"CSV 파싱 오류: {e}")
+            else:
+                csv_text = st.text_area(
+                    "CSV 직접 입력",
+                    value=EXAMPLE_CSV.strip() if not schematic_image else "",
+                    height=180,
+                    help="chip,pin,function,label 헤더 포함",
+                    placeholder="이미지를 업로드하면 자동 추출됩니다.",
+                )
+                if csv_text:
+                    try:
+                        df_preview = pd.read_csv(StringIO(csv_text))
+                        st.dataframe(df_preview.head(10), use_container_width=True)
+                        st.caption(f"총 {len(df_preview)}개 핀")
+                    except Exception:
+                        pass
 
     with col_right:
         prompt = st.text_area(
             "자연어 요구사항 프롬프트",
             value=EXAMPLE_PROMPT,
-            height=220,
+            height=200,
             placeholder=EXAMPLE_PROMPT,
             help=(
-                "포함 권장 항목: 칩명·클럭 / 모터종류·제어방식 / 피드백센서 / "
+                "포함 권장: 칩명·클럭 / 모터종류·제어방식 / 피드백센서 / "
                 "PWM채널·데드타임 / 통신프로토콜 / 외부장치"
             ),
         )
@@ -225,15 +255,40 @@ with tab1:
             icon = "✅" if ok else "⬜"
             st.caption(f"{icon} {label}")
 
+        # Vision 이전 결과 표시
+        if st.session_state.vision_analysis:
+            with st.expander("Vision 분석 결과 (이전 실행)", expanded=False):
+                st.markdown(st.session_state.vision_analysis)
+
+        if st.session_state.extracted_csv:
+            with st.expander("Vision 추출 핀맵 (이전 실행)", expanded=False):
+                try:
+                    df_v = pd.read_csv(StringIO(st.session_state.extracted_csv))
+                    st.dataframe(df_v, use_container_width=True)
+                    st.caption(f"Vision 추출 핀 수: {len(df_v)}")
+                except Exception:
+                    st.text(st.session_state.extracted_csv[:500])
+
     st.divider()
 
-    # 검증 실행 버튼
-    run_disabled = not backend_ok
-    if run_disabled:
+    # 입력 유효성 확인
+    has_image = schematic_image is not None
+    has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
+    can_submit = has_image or has_csv
+
+    run_disabled = not backend_ok or not can_submit
+    if not backend_ok:
         st.warning("Backend 서버에 연결할 수 없습니다. `uvicorn backend.main:app --port 8000` 실행 후 재시도하세요.")
+    elif not can_submit:
+        st.info("회로도 이미지 또는 핀맵 CSV를 입력해주세요.")
+
+    if has_image:
+        st.success("회로도 이미지 감지 — Gemma 4 31B Vision이 핀맵을 자동 추출합니다.")
+
+    btn_label = "검증 실행 (Vision + Rule Engine + RAG + LLM)" if has_image else "검증 실행 (Rule Engine + RAG + LLM)"
 
     if st.button(
-        "검증 실행",
+        btn_label,
         type="primary",
         disabled=run_disabled,
         use_container_width=True,
@@ -242,62 +297,78 @@ with tab1:
         if not prompt.strip():
             st.error("프롬프트를 입력하세요.")
             st.stop()
-        if csv_mode == "파일 업로드" and csv_file is None:
-            st.error("CSV 파일을 업로드하세요.")
-            st.stop()
-        if csv_mode == "직접 입력" and not csv_text:
-            st.error("CSV를 입력하세요.")
-            st.stop()
 
-        with st.spinner("STM32G4 Agent 검증 중 (LLM 응답에 30~120초 소요될 수 있습니다)..."):
+        spinner_msg = (
+            "Gemma 4 31B Vision으로 회로도 분석 중 → Rule Engine → RAG → LLM 검증 (총 60~180초 소요)..."
+            if has_image
+            else "STM32G4 Agent 검증 중 (LLM 응답에 30~120초 소요될 수 있습니다)..."
+        )
+
+        with st.spinner(spinner_msg):
             try:
-                if csv_mode == "파일 업로드":
+                # multipart/form-data 조립
+                files: dict = {}
+                data: dict = {"chip": chip, "prompt": prompt}
+
+                if has_image:
+                    schematic_image.seek(0)
+                    files["schematic_image"] = (
+                        schematic_image.name,
+                        schematic_image,
+                        schematic_image.type or "image/jpeg",
+                    )
+
+                if csv_file is not None:
                     csv_file.seek(0)
-                    files = {"csv_file": (csv_file.name, csv_file, "text/csv")}
-                    data = {"chip": chip, "prompt": prompt}
-                    r = requests.post(
-                        f"{BACKEND_URL}/v1/review",
-                        data=data,
-                        files=files,
-                        timeout=180,
-                    )
-                else:
-                    data = {"chip": chip, "prompt": prompt, "pinmap_csv": csv_text}
-                    r = requests.post(
-                        f"{BACKEND_URL}/v1/review",
-                        data=data,
-                        timeout=180,
-                    )
+                    files["csv_file"] = (csv_file.name, csv_file, "text/csv")
+                elif csv_text and csv_text.strip():
+                    data["pinmap_csv"] = csv_text
+
+                r = requests.post(
+                    f"{BACKEND_URL}/v1/review",
+                    data=data,
+                    files=files if files else None,
+                    timeout=300,
+                )
 
                 if r.status_code == 200:
                     report = r.json()
                     st.session_state.review_passed = True
                     st.session_state.validated_pins = report.get("validated_pins", {})
                     st.session_state.last_report = report
+                    st.session_state.vision_analysis = report.get("vision_analysis", "")
                 elif r.status_code == 403:
                     body = r.json()
                     report = body.get("report", body)
                     st.session_state.review_passed = False
                     st.session_state.last_report = report
+                    st.session_state.vision_analysis = report.get("vision_analysis", "")
                 else:
                     st.error(f"서버 오류 {r.status_code}: {r.text[:300]}")
                     st.stop()
 
             except requests.exceptions.Timeout:
-                st.error("요청 시간 초과 (180초). 서버 부하를 확인하세요.")
+                st.error("요청 시간 초과 (300초). 서버 부하를 확인하세요.")
                 st.stop()
             except Exception as e:
                 st.error(f"요청 실패: {e}")
                 st.stop()
 
-    # 결과 표시
+    # ── 결과 표시 ──────────────────────────────────────────────────────────
     if st.session_state.last_report:
         report = st.session_state.last_report
         errors = report.get("errors", [])
         warnings = report.get("warnings", [])
         suggestions = report.get("suggestions", [])
+        vision_txt = report.get("vision_analysis", "")
 
         st.divider()
+
+        # Vision 분석 결과
+        if vision_txt:
+            with st.expander("Vision 분석 — Gemma 4 31B 이미지 분석 결과", expanded=True):
+                st.markdown(vision_txt)
+
         st.subheader("검증 결과")
 
         if errors:
@@ -444,6 +515,6 @@ with tab3:
         pass
 
     st.info(
-        "Step 3는 Gemma-4-31B-It (Q8, ~32GB) 모델과 Golden Module RAG를 사용하여 "
+        "Step 3는 Gemma-4-31B (Q4_K_M) 모델과 Golden Module RAG를 사용하여 "
         "USER CODE BEGIN/END 영역에 FOC 알고리즘을 자동 삽입합니다. (구현 예정)"
     )

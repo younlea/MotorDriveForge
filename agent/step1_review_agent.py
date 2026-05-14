@@ -1,7 +1,16 @@
 """
 Step 1 Review Agent — STM32G4 핀 검증 + 요구사항 파싱
-입력: ReviewRequest (chip, pinmap_csv, prompt)
-출력: ReviewReport (errors, warnings, suggestions, validated_pins)
+입력: ReviewRequest (chip, schematic_image_b64 OR pinmap_csv, prompt)
+출력: ReviewReport (errors, warnings, suggestions, validated_pins, vision_analysis)
+
+새 흐름:
+  [Vision] Gemma 4 31B 멀티모달 → 이미지에서 pinmap 추출 + 초기 분석
+      ↓
+  [A] Rule Engine (결정론)
+      ↓
+  [B] Hybrid RAG (Rule Engine 키워드 + Vision 분석으로 쿼리 보강)
+      ↓
+  [C] LLM Persona Debate (Gemma 4 31B, Vision 분석 컨텍스트 포함)
 """
 
 from __future__ import annotations
@@ -25,8 +34,15 @@ logger = logging.getLogger(__name__)
 
 class ReviewRequest(BaseModel):
     chip: str = Field(..., description="예: STM32G474RET6")
-    pinmap_csv: str = Field(..., description="CSV 문자열 (chip,pin,function,label 컬럼)")
+    pinmap_csv: str = Field(
+        default="",
+        description="CSV 문자열 (chip,pin,function,label). 이미지 제공 시 자동 생성.",
+    )
     prompt: str = Field(..., description="자연어 요구사항 프롬프트")
+    schematic_image_b64: Optional[str] = Field(
+        None,
+        description="회로도 이미지 base64 인코딩 (JPEG/PNG). 제공 시 Vision 분석 수행.",
+    )
 
 
 class ReviewReport(BaseModel):
@@ -35,6 +51,7 @@ class ReviewReport(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     suggestions: List[str] = Field(default_factory=list)
     validated_pins: Dict[str, Any] = Field(default_factory=dict)
+    vision_analysis: str = Field(default="", description="Vision 모델이 이미지에서 추출한 초기 분석")
 
 
 class RequirementsDict(BaseModel):
@@ -131,6 +148,7 @@ OPAMP_MAX: Dict[str, int] = {
 }
 DMA_CH_MAX = 16
 
+GEMMA4_VISION_MODEL = "gemma4:31b"
 
 # ---------------------------------------------------------------------------
 # ReviewAgent
@@ -170,17 +188,20 @@ class ReviewAgent:
         return f"G4{m.group(1)}" if m else "G474"
 
     def _available_model(self) -> str:
-        """Ollama에 로드된 모델 확인 — 72b 우선, 없으면 7b 폴백."""
+        """Ollama에 로드된 모델 확인 — Gemma 4 31B 우선, 없으면 Qwen2.5 폴백."""
         try:
             r = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
             if r.status_code == 200:
                 names = [m["name"] for m in r.json().get("models", [])]
-                for candidate in ["qwen2.5:72b", "qwen2.5:32b", "qwen2.5:7b", "qwen2.5"]:
+                for candidate in [
+                    "gemma4:31b", "gemma4:27b", "gemma4",
+                    "qwen2.5:72b", "qwen2.5:32b", "qwen2.5:7b", "qwen2.5",
+                ]:
                     if any(candidate in n for n in names):
                         return candidate
         except Exception:
             pass
-        return "qwen2.5:7b"
+        return GEMMA4_VISION_MODEL
 
     def _ollama_generate(self, system: str, user: str, model: str) -> str:
         payload = {
@@ -201,6 +222,103 @@ class ReviewAgent:
         except Exception as e:
             logger.error("Ollama generate error: %s", e)
             return ""
+
+    def _ollama_multimodal(self, prompt: str, image_b64: str, model: str) -> str:
+        """Ollama multimodal generate — 이미지 + 텍스트 → 응답 (Gemma 4 31B)."""
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 3072},
+        }
+        try:
+            r = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=payload,
+                timeout=180,
+            )
+            r.raise_for_status()
+            return r.json().get("response", "")
+        except Exception as e:
+            logger.error("Ollama multimodal error: %s", e)
+            return ""
+
+    # ------------------------------------------------------------------
+    # Vision: 회로도 이미지 → pinmap CSV + 초기 분석
+    # ------------------------------------------------------------------
+
+    def _vision_extract_pinmap(
+        self, image_b64: str, prompt: str, chip_hint: str = ""
+    ) -> Tuple[str, str]:
+        """Gemma 4 31B 멀티모달로 회로도 이미지 → (pinmap_csv, vision_analysis).
+
+        pinmap_csv: chip,pin,function,label 형식 CSV 문자열
+        vision_analysis: 이미지에서 추출한 초기 분석 텍스트 (한국어)
+        """
+        chip_hint_text = f"\n타겟 칩 힌트: {chip_hint}" if chip_hint else ""
+        vision_prompt = f"""당신은 STM32G4 모터 드라이버 회로 전문가입니다.
+첨부된 회로도 이미지를 분석하여 다음 정보를 추출하세요.{chip_hint_text}
+사용자 요구사항: {prompt}
+
+아래 형식으로 정확히 출력하세요:
+
+CHIP: <칩명, 예: STM32G474RET6>
+
+CSV:
+chip,pin,function,label
+<chip>,<pin>,<function>,<label>
+... (모든 핀 나열)
+
+ANALYSIS:
+<회로도의 설계 의도, 주요 기능, 잠재적 문제점에 대한 한국어 분석>
+
+주의:
+- function은 STM32 HAL 형식으로 (예: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1)
+- 이미지에서 명확히 보이는 핀만 포함, 불확실한 핀은 제외
+- CSV 섹션은 헤더 포함 순수 CSV만, 설명 추가 금지"""
+
+        logger.info("Vision extraction 시작 (model=%s)", GEMMA4_VISION_MODEL)
+        raw = self._ollama_multimodal(vision_prompt, image_b64, GEMMA4_VISION_MODEL)
+
+        if not raw:
+            logger.warning("Vision extraction 응답 없음")
+            return "", ""
+
+        # CHIP 파싱
+        chip_match = re.search(r"CHIP:\s*(STM32G\w+)", raw, re.IGNORECASE)
+        extracted_chip = chip_match.group(1).upper() if chip_match else chip_hint
+
+        # CSV 섹션 추출
+        csv_match = re.search(r"CSV:\s*\n(.*?)(?:\n\nANALYSIS:|\Z)", raw, re.DOTALL)
+        pinmap_csv = ""
+        if csv_match:
+            csv_block = csv_match.group(1).strip()
+            # chip 컬럼이 없으면 보완
+            lines = csv_block.splitlines()
+            if lines and "chip" in lines[0].lower():
+                # chip 컬럼 값이 비어있으면 extracted_chip으로 채움
+                fixed = [lines[0]]
+                for line in lines[1:]:
+                    parts = line.split(",")
+                    if parts and not parts[0].strip().startswith("STM32"):
+                        parts[0] = extracted_chip
+                        line = ",".join(parts)
+                    fixed.append(line)
+                pinmap_csv = "\n".join(fixed)
+            else:
+                pinmap_csv = csv_block
+
+        # ANALYSIS 섹션 추출
+        analysis_match = re.search(r"ANALYSIS:\s*\n(.*)", raw, re.DOTALL)
+        vision_analysis = analysis_match.group(1).strip() if analysis_match else raw[:500]
+
+        logger.info(
+            "Vision extraction 완료 — chip=%s, csv_lines=%d",
+            extracted_chip,
+            len(pinmap_csv.splitlines()),
+        )
+        return pinmap_csv, vision_analysis
 
     # ------------------------------------------------------------------
     # Public interface
@@ -308,7 +426,6 @@ class ReviewAgent:
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             data = json.loads(m.group(0))
-            # 기존 req에 LLM 결과 병합 (non-empty 값만)
             for k, v in data.items():
                 if v is not None and v != "" and hasattr(req, k):
                     setattr(req, k, v)
@@ -327,7 +444,7 @@ class ReviewAgent:
         pins = set(pinmap_df["pin"].str.upper().tolist()) if "pin" in pinmap_df.columns else set()
         functions = set(pinmap_df["function"].str.upper().tolist()) if "function" in pinmap_df.columns else set()
 
-        # 1. TIM1/TIM8 핀 충돌: PB0/PB1 은 TIM1_CH2N/CH3N 이면서 TIM8_CH2N/CH3N AF가 다름
+        # 1. TIM1/TIM8 핀 충돌
         shared_brk_pins = {"PB0", "PB1"}
         if shared_brk_pins & pins:
             tim1_funcs = {f for f in functions if "TIM1" in f}
@@ -355,7 +472,7 @@ class ReviewAgent:
                 f"FOC {requirements.motor_count}모터에는 {required_opamp}개 필요."
             )
 
-        # 3. BRK 핀 공유 여부 (모터별 독립 보호 불가)
+        # 3. BRK 핀 공유 여부
         brk_funcs = [f for f in functions if "BKIN" in f]
         if requirements.motor_count > 1 and len(brk_funcs) < requirements.motor_count:
             warnings.append(
@@ -452,14 +569,43 @@ class ReviewAgent:
                 return r.json()["embedding"]
         except Exception:
             pass
-        # 폴백: 0 벡터 (검색 불가, 오류 방지용)
         return [0.0] * 1024
 
     def run(self, request: ReviewRequest) -> ReviewReport:
-        """메인 실행 — ReviewRequest → ReviewReport."""
-        logger.info("ReviewAgent.run() chip=%s", request.chip)
+        """메인 실행 — ReviewRequest → ReviewReport.
 
-        # 1. CSV 파싱
+        흐름:
+          [Vision]  이미지 → pinmap CSV + 초기 분석  (이미지 제공 시)
+          [A]       Rule Engine 결정론 검증
+          [B]       Hybrid RAG (Rule Engine 키워드 + Vision 분석으로 쿼리 보강)
+          [C]       LLM Persona Debate (Vision 분석 포함 전체 컨텍스트)
+        """
+        logger.info("ReviewAgent.run() chip=%s, has_image=%s", request.chip, bool(request.schematic_image_b64))
+
+        vision_analysis = ""
+
+        # ── [Vision] 이미지가 있으면 pinmap 추출 ──────────────────────────
+        if request.schematic_image_b64:
+            csv_from_vision, vision_analysis = self._vision_extract_pinmap(
+                request.schematic_image_b64,
+                request.prompt,
+                chip_hint=request.chip,
+            )
+            # 직접 입력 CSV가 없을 때만 Vision CSV 사용
+            if not request.pinmap_csv.strip() and csv_from_vision:
+                request.pinmap_csv = csv_from_vision
+                logger.info("Vision CSV 사용 (%d chars)", len(csv_from_vision))
+            elif csv_from_vision:
+                logger.info("직접 입력 CSV 우선 사용 (Vision 분석은 컨텍스트에만 포함)")
+
+        # ── CSV 파싱 ───────────────────────────────────────────────────────
+        if not request.pinmap_csv.strip():
+            return ReviewReport(
+                chip=request.chip,
+                errors=["핀맵 정보 없음: 회로도 이미지 또는 CSV를 입력해주세요."],
+                vision_analysis=vision_analysis,
+            )
+
         try:
             from io import StringIO
             pinmap_df = pd.read_csv(StringIO(request.pinmap_csv))
@@ -468,35 +614,47 @@ class ReviewAgent:
             return ReviewReport(
                 chip=request.chip,
                 errors=[f"CSV 파싱 오류: {e}"],
+                vision_analysis=vision_analysis,
             )
 
-        # 2. 요구사항 파싱
+        # ── [A] 요구사항 파싱 + Rule Engine ───────────────────────────────
         requirements = self.parse_prompt(request.prompt)
         if not requirements.chip:
             requirements.chip = request.chip
 
-        # 3. RAG 컨텍스트 수집
+        rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
+
+        # ── [B] Hybrid RAG — Rule Engine 키워드 + Vision 분석으로 쿼리 보강 ──
+        keyword_hints = ""
+        if rule_errors or rule_warnings:
+            # Rule Engine 결과에서 핵심 키워드 추출
+            all_issues = " ".join(rule_errors + rule_warnings)
+            kw_matches = re.findall(r"TIM\w+|OPAMP\w*|DMA|FDCAN\w*|ADC\w*|BRK|AF\d+|BDTR", all_issues)
+            keyword_hints = " ".join(set(kw_matches))
+
         rag_query = (
             f"STM32G4 {request.chip} 핀 AF 검증 "
             f"FOC PWM TIM1 TIM8 OPAMP FDCAN 규칙"
         )
+        if keyword_hints:
+            rag_query += f" {keyword_hints}"
+        if vision_analysis:
+            # Vision 초기 분석의 첫 200자를 RAG 쿼리에 반영
+            rag_query += f" {vision_analysis[:200]}"
+
         rag_docs = self.rag_query(rag_query, top_k=5)
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
 
-        # 4. 규칙 엔진 검증
-        rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
-
-        # 5. LLM 검증
+        # ── [C] LLM Persona Debate ─────────────────────────────────────────
         llm_errors, llm_warnings, llm_suggestions = self._llm_validate(
-            request, requirements, pinmap_df, rag_context
+            request, requirements, pinmap_df, rag_context, vision_analysis
         )
 
-        # 6. 결과 합산 (중복 제거)
+        # ── 결과 합산 (중복 제거) ──────────────────────────────────────────
         all_errors = list(dict.fromkeys(rule_errors + llm_errors))
         all_warnings = list(dict.fromkeys(rule_warnings + llm_warnings))
         all_suggestions = list(dict.fromkeys(llm_suggestions))
 
-        # 7. 확정 핀 JSON 생성
         validated_pins = self._build_validated_pins(pinmap_df, requirements)
 
         return ReviewReport(
@@ -505,6 +663,7 @@ class ReviewAgent:
             warnings=all_warnings,
             suggestions=all_suggestions,
             validated_pins=validated_pins,
+            vision_analysis=vision_analysis,
         )
 
     def _llm_validate(
@@ -513,6 +672,7 @@ class ReviewAgent:
         requirements: RequirementsDict,
         pinmap_df: pd.DataFrame,
         rag_context: str,
+        vision_analysis: str = "",
     ) -> Tuple[List[str], List[str], List[str]]:
         """LLM 핀 검증 — errors, warnings, suggestions 반환."""
         model = self._available_model()
@@ -532,10 +692,14 @@ Rules:
 - Be specific: include pin names and peripheral names.
 - Do not repeat issues already listed in the rule engine output."""
 
+        vision_section = ""
+        if vision_analysis:
+            vision_section = f"\nVision 초기 분석 (이미지에서 추출):\n{vision_analysis}\n"
+
         user = f"""Chip: {request.chip}
 Requirements (parsed):
 {requirements.model_dump_json(indent=2)}
-
+{vision_section}
 Pinmap CSV:
 {pinmap_df.to_csv(index=False)}
 

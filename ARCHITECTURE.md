@@ -10,7 +10,10 @@
 ```mermaid
 flowchart TD
     %% ============ INPUT ============
-    INPUT["📥 USER INPUT<br/>pinmap.csv + 자연어 프롬프트<br/>(선택: 스키매틱 이미지 — Phase 2)"]:::input
+    INPUT["📥 USER INPUT<br/>회로도 이미지 + 자연어 프롬프트<br/>(선택: pinmap.csv 직접 입력)"]:::input
+
+    %% ============ VISION ============
+    VISION["👁️ Vision · 이미지 분석<br/>━━━━━━━━━━━━━<br/>Gemma 4 31B Multimodal<br/>회로도 → pinmap 자동 추출<br/>+ 초기 설계 분석 (한국어)"]:::llm
 
     %% ============ STEP 1 ============
     subgraph S1["STEP 1 · HW Review Agent"]
@@ -22,13 +25,13 @@ flowchart TD
 
         FAST["⛔ 빠른 차단 모드<br/>HTTP 403 + 룰 결과 반환<br/>(CI / 자동검증 용)"]:::block
 
-        B["🔍 B · Hybrid RAG Retrieval<br/>━━━━━━━━━━━━━<br/>쿼리 = 프롬프트 + 핀/페리페럴 키워드<br/>+ Rule Engine 결과(에러/워닝)<br/>━━━━━━━━━━━━━<br/>BGE-M3 (dense) ⊕ BM25 (sparse)<br/>→ Qdrant Top-K 청크"]:::rag
+        B["🔍 B · Hybrid RAG Retrieval<br/>━━━━━━━━━━━━━<br/>쿼리 = 프롬프트 + 핀/페리페럴 키워드<br/>+ Rule Engine 결과(에러/워닝)<br/>+ Vision 초기 분석 (보강)<br/>━━━━━━━━━━━━━<br/>BGE-M3 (dense) ⊕ BM25 (sparse)<br/>→ Qdrant Top-K 청크"]:::rag
 
-        C["🧠 C · LLM Persona Debate<br/>━━━━━━━━━━━━━<br/>입력 컨텍스트:<br/>• 사용자 프롬프트 + pinmap<br/>• Rule Engine 결과 (전체)<br/>• RAG Top-K 청크<br/>━━━━━━━━━━━━━<br/>Backbone: Gemma 4 31B Dense (Q4_K_M)"]:::llm
+        C["🧠 C · LLM Persona Debate<br/>━━━━━━━━━━━━━<br/>입력 컨텍스트:<br/>• 사용자 프롬프트 + pinmap<br/>• Vision 초기 분석<br/>• Rule Engine 결과 (전체)<br/>• RAG Top-K 청크<br/>━━━━━━━━━━━━━<br/>Backbone: Gemma 4 31B Dense (Q4_K_M)"]:::llm
 
         PERSONA["👥 5 Personas (in-context prompts)<br/>━━━━━━━━━━━━━<br/>① MCU/Periph  ② Motor Ctrl  ③ Power/EMI<br/>④ Safety/Failsafe  ⚖ Moderator<br/>━━━━━━━━━━━━━<br/>모든 주장은 chunk_id 인용 강제"]:::persona
 
-        REPORT["📋 Review Report (JSON)<br/>errors[] · warnings[] · suggestions[]<br/>+ evidence[chunk_id, source, quote]<br/>+ 자연어 설명 (신입용)"]:::output1
+        REPORT["📋 Review Report (JSON)<br/>errors[] · warnings[] · suggestions[]<br/>+ vision_analysis (이미지 분석)<br/>+ evidence[chunk_id, source, quote]<br/>+ 자연어 설명 (신입용)"]:::output1
     end
 
     %% ============ GATE ============
@@ -61,7 +64,10 @@ flowchart TD
     FINAL["📦 FINAL OUTPUT<br/>firmware.zip · review_report.md<br/>pinmap_validated.json · trace.json"]:::final
 
     %% ============ FLOW ============
-    INPUT --> A
+    INPUT --> VISION
+    INPUT -. "CSV 직접 입력<br/>(이미지 없을 때)" .-> A
+    VISION -- "pinmap 추출<br/>+ 초기 분석" --> A
+    VISION -. "초기 분석<br/>컨텍스트" .-> C
     A --> GATE
     GATE -- "errors > 0<br/>(빠른 차단 모드)" --> FAST
     GATE -- "pass / 풀 리뷰 모드" --> B
@@ -92,22 +98,28 @@ flowchart TD
 
 ## Step 1 상세 — 데이터 의존성
 
-이 부분이 v1 다이어그램에서 가장 중요한 수정사항입니다. **A/B/C는 병렬이 아니라 순차 + 의존 관계**입니다.
+**Vision → A → B → C 순차 실행.** 이미지가 있을 때 Vision이 pinmap을 추출하고 그 결과가 전체 파이프라인의 입력이 됩니다.
 
 ```mermaid
 flowchart LR
-    IN["pinmap.csv<br/>+ prompt"]:::input
+    IMG["회로도 이미지<br/>+ prompt"]:::input
+    CSV["pinmap.csv<br/>(직접 입력)"]:::input
+
+    V["Vision<br/>Gemma 4 31B<br/>Multimodal"]:::llm
     A["A · Rule Engine<br/>(결정론)"]:::rule
     B["B · Hybrid RAG<br/>BGE-M3 ⊕ BM25"]:::rag
     C["C · LLM Debate<br/>Gemma 4 31B"]:::llm
-    OUT["Review Report"]:::output
+    OUT["Review Report<br/>+ vision_analysis"]:::output
 
-    IN --> A
-    A -- "errors + warnings<br/>(전체 결과)" --> C
+    IMG --> V
+    V -- "pinmap 추출" --> A
+    CSV -. "이미지 없을 때" .-> A
+    V -- "초기 분석" --> C
+    A -- "errors + warnings" --> C
     A -- "키워드 추출<br/>(쿼리 보강)" --> B
-    IN -- "원본 prompt<br/>(쿼리)" --> B
-    B -- "Top-K 청크<br/>(근거 자료)" --> C
-    IN -- "원본 컨텍스트" --> C
+    IMG -- "prompt" --> B
+    V -- "초기 분석<br/>(쿼리 보강)" --> B
+    B -- "Top-K 청크" --> C
     C --> OUT
 
     classDef input fill:#1a1a1a,stroke:#d4ff3a,color:#e8e6e3
@@ -118,9 +130,11 @@ flowchart LR
 ```
 
 **핵심 원칙:**
+- Vision(Gemma 4 31B 멀티모달)이 회로도 이미지 → pinmap CSV + 초기 분석을 추출 (선택)
+- 직접 CSV 입력이 있으면 CSV 우선, Vision 분석은 LLM 컨텍스트에만 포함
 - Rule Engine 결과는 LLM 컨텍스트에 **항상** 포함됨 (LLM이 자연어 설명·후속 위험 추론 담당)
 - RAG는 LLM의 입력을 augment하는 용도 — 단독으로 답 생성 안 함
-- Rule Engine ERROR/WARNING 키워드를 RAG 쿼리에도 반영해서 retrieval 품질 향상
+- Rule Engine ERROR/WARNING 키워드 + Vision 분석을 RAG 쿼리에 반영해서 retrieval 품질 향상
 - LLM 페르소나 토론은 **WARNING 영역과 판단형 항목**에서만 효과 — 결정론적 위반은 Rule Engine이 단독 처리
 
 ---
@@ -146,7 +160,7 @@ flowchart LR
 | **BAAI/bge-m3** | Dense 임베딩 | 사전학습, 다국어 / Phase-2: STM32 어휘 contrastive fine-tune (선택) | <2 GB |
 | **BM25 (rank_bm25)** | Sparse retriever (TIM1_CH1N, PA8 같은 정확한 심볼 매칭) | 학습 없음, 인덱스만 | <1 GB |
 | **5 Personas (prompt)** | MCU·Motor·Power·Safety·Moderator | 별도 가중치 없음, Gemma 4 31B 위 프롬프트 엔지니어링 | 0 |
-| **Vision (Phase 2)** | 스키매틱 이미지 → pinmap | Gemma 4 멀티모달 활용 (Auto-SPICE/EEschematic 패턴) | 포함 |
+| **Vision** | 회로도 이미지 → pinmap 추출 + 초기 분석 | Gemma 4 31B 멀티모달 (동일 인스턴스 재사용) | 포함 (31B와 공유) |
 
 **Co-residency 검증:** 31B + 26B = ~42 GB ≪ 128 GB 통합메모리 ✓
 

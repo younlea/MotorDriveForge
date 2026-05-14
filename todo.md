@@ -1,6 +1,6 @@
 # TODO — STM32G4 Motor Drive Agent
 
-최종 업데이트: 2026-05-11
+최종 업데이트: 2026-05-14
 
 > **안내:** 단기 최우선 과제(Task 01~06) 및 상세 작업 우선순위는 [`tasks/README.md`](./tasks/README.md)에서 별도로 관리되고 있습니다. 본 `todo.md`는 전체 프로젝트의 거시적 진행 상황과 인프라 설정 작업을 주로 추적합니다.
 
@@ -195,3 +195,11 @@ Step 3: Gemma 4 26B MoE QLoRA (r=64, USER CODE 삽입 정확도 향상)
 - [x] frontend/app.py — Streamlit MVP UI (errors 빨강, warnings 노랑, 연결 상태 사이드바)
 - [x] docker-compose.yml — Qdrant + Backend + Frontend 통합 배포
 - [x] README.md — 전체 셋업 가이드 (DGX Spark 기준)
+
+### Task 07 — Vision 멀티모달 입력 (2026-05-14)
+- [x] agent/step1_review_agent.py — Vision 스텝 추가 (이미지 → pinmap 자동 추출, RAG 쿼리 보강)
+- [x] backend/main.py — `schematic_image` 이미지 업로드 수신, base64 변환
+- [x] frontend/app.py — 이미지 업로더 주 입력 전환, Vision 분석 결과 표시 섹션
+- [x] ARCHITECTURE.md — Vision 노드 다이어그램 추가, 데이터 흐름 업데이트
+- [x] CLAUDE.md — Step 1 의존성 다이어그램 업데이트
+- [x] tasks/07_vision_multimodal_input.md — 작업 명세 문서

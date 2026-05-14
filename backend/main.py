@@ -1,7 +1,7 @@
 """
 FastAPI 백엔드 — STM32G4 Motor Drive Agent
 엔드포인트:
-  POST /v1/review        핀맵 CSV + 프롬프트 → 리뷰 리포트
+  POST /v1/review        회로도 이미지(선택) + 프롬프트 → 리뷰 리포트
   GET  /v1/status        파이프라인 서비스 상태
   POST /v1/generate-ioc  핀 JSON → .ioc 파일 생성 (Step 2)
   GET  /v1/health        헬스체크
@@ -9,6 +9,7 @@ FastAPI 백엔드 — STM32G4 Motor Drive Agent
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -25,7 +26,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-# 프로젝트 루트 기준 agent 모듈 임포트
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.step1_review_agent import ReviewAgent, ReviewReport, ReviewRequest
@@ -53,19 +53,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="STM32G4 Motor Drive Agent API",
-    description="3-Step 파이프라인: 핀 검증 → CubeMX 자동화 → 알고리즘 통합",
-    version="1.0.0",
+    description="3-Step 파이프라인: 회로도 이미지 → 핀 검증 → CubeMX 자동화 → 알고리즘 통합",
+    version="2.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Streamlit / React 연동
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ReviewAgent 싱글턴
 _agent: Optional[ReviewAgent] = None
 
 
@@ -128,12 +127,11 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/status — 서비스 연결 확인
+# GET /v1/status
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/status", response_model=StatusResponse, tags=["System"])
 async def get_status():
-    # Ollama 확인
     ollama_ok = False
     ollama_models: List[str] = []
     try:
@@ -144,7 +142,6 @@ async def get_status():
     except Exception:
         pass
 
-    # Qdrant 확인
     qdrant_ok = False
     qdrant_collections: List[str] = []
     try:
@@ -167,36 +164,59 @@ async def get_status():
 
 
 # ---------------------------------------------------------------------------
-# POST /v1/review — Step 1 핀 검증
+# POST /v1/review — Step 1: Vision + 핀 검증
 # ---------------------------------------------------------------------------
 
 @app.post("/v1/review", response_model=ReviewReport, tags=["Step 1"])
 async def review(
     chip: str = Form(..., description="예: STM32G474RET6"),
     prompt: str = Form(..., description="자연어 요구사항 프롬프트"),
-    csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV 파일 (선택)"),
+    schematic_image: Optional[UploadFile] = File(
+        None,
+        description="회로도 이미지 (JPEG/PNG). 제공 시 Gemma 4 31B가 핀맵을 자동 추출.",
+    ),
+    csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV (선택 — 이미지가 없을 때 필수)"),
     pinmap_csv: Optional[str] = Form(None, description="CSV 문자열 직접 입력 (선택)"),
 ):
     """
-    핀맵 CSV + 자연어 프롬프트 → 검증 리포트.
+    회로도 이미지 + 자연어 프롬프트 → 검증 리포트.
 
-    - csv_file OR pinmap_csv 중 하나 필수.
-    - errors[] > 0 이면 HTTP 403 반환 (펌웨어 생성 차단).
-    - warnings는 표시 후 통과 허용.
+    입력 우선순위:
+      1. schematic_image → Gemma 4 31B Vision이 핀맵 자동 추출
+      2. csv_file 또는 pinmap_csv → 직접 입력 CSV 사용
+      (이미지와 CSV 동시 제공 시: 직접 CSV 우선, Vision 분석은 LLM 컨텍스트에만 포함)
+
+    - errors[] > 0 이면 HTTP 403 반환.
+    - vision_analysis 필드에 이미지 분석 결과 포함.
     """
+    # 이미지 → base64
+    image_b64: Optional[str] = None
+    if schematic_image is not None:
+        image_bytes = await schematic_image.read()
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        logger.info("이미지 수신: %s (%.1f KB)", schematic_image.filename, len(image_bytes) / 1024)
+
     # CSV 소스 결정
+    csv_text = ""
     if csv_file is not None:
         raw_bytes = await csv_file.read()
-        csv_text = raw_bytes.decode("utf-8-sig")  # BOM 제거
+        csv_text = raw_bytes.decode("utf-8-sig")
     elif pinmap_csv:
         csv_text = pinmap_csv
-    else:
+
+    # 이미지도 CSV도 없으면 거부
+    if image_b64 is None and not csv_text.strip():
         raise HTTPException(
             status_code=422,
-            detail="csv_file 또는 pinmap_csv 중 하나를 제공해야 합니다.",
+            detail="schematic_image(회로도 이미지) 또는 csv_file/pinmap_csv 중 하나를 제공해야 합니다.",
         )
 
-    req = ReviewRequest(chip=chip, pinmap_csv=csv_text, prompt=prompt)
+    req = ReviewRequest(
+        chip=chip,
+        pinmap_csv=csv_text,
+        prompt=prompt,
+        schematic_image_b64=image_b64,
+    )
 
     try:
         report = get_agent().run(req)
@@ -204,7 +224,6 @@ async def review(
         logger.exception("ReviewAgent.run() 오류")
         raise HTTPException(status_code=500, detail=f"검증 에이전트 오류: {e}")
 
-    # 검증 게이트: errors > 0 → HTTP 403
     if report.errors:
         return JSONResponse(
             status_code=403,
@@ -223,10 +242,7 @@ async def review(
 
 @app.post("/v1/generate-ioc", response_model=GenerateIocResponse, tags=["Step 2"])
 async def generate_ioc(request: GenerateIocRequest):
-    """
-    확정 핀 JSON → STM32CubeMX .ioc 파일 생성.
-    현재 Python 스크립트로 .ioc 텍스트 생성 (CubeMX 헤드리스 연동 준비).
-    """
+    """확정 핀 JSON → STM32CubeMX .ioc 파일 생성."""
     vp = request.validated_pins
     chip = vp.get("chip", "STM32G474RETx")
     pins: List[Dict[str, Any]] = vp.get("pins", [])
@@ -286,7 +302,6 @@ def _build_ioc_content(
         "",
     ]
 
-    # 핀 할당
     for i, p in enumerate(pins):
         pin = p.get("pin", "")
         func = p.get("function", "")
@@ -296,7 +311,6 @@ def _build_ioc_content(
             if label:
                 lines.append(f"{pin}.GPIO_Label={label}")
 
-    # TIM1 설정 (FOC PWM)
     motor_count = vp.get("motor_count", 1)
     deadtime_ns = vp.get("deadtime_ns", 500)
     if motor_count >= 1:
@@ -310,7 +324,6 @@ def _build_ioc_content(
             "TIM1.RepetitionCounter=1",
         ]
 
-    # FDCAN 설정
     comms = vp.get("comms", [])
     if "fdcan" in comms:
         fdcan_baud = vp.get("fdcan_baudrate", 1000000)
@@ -321,7 +334,6 @@ def _build_ioc_content(
             "FDCAN1.NominalSamplePoint=87.5",
         ]
 
-    # SPI EEPROM
     if vp.get("spi_eeprom"):
         lines += [
             "",
@@ -338,7 +350,6 @@ def _build_ioc_content(
 
 def _ns_to_deadtime_reg(ns: int) -> int:
     """데드타임 ns → TIM1 DTG 레지스터 근사값 (170MHz 기준)."""
-    # DTG = ns / (1/170MHz * 1e9) 근사 (DTG[7:5]=000 범위, 1 step = ~5.9ns)
     step_ns = 1e9 / 170_000_000
     return min(int(ns / step_ns), 127)
 

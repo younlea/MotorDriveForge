@@ -34,6 +34,7 @@ flowchart LR
 | [04](./04_synthetic_broken_schematics.md) | 합성 망가진 스키매틱 파이프라인 | 🟡 높음 | 3–5d | 없음 |
 | [05](./05_persona_debate.md) | 5 페르소나 토론 시스템 | 🟡 높음 | 2–3d | 04 필수, 02·03 권장 |
 | [06](./06_codegen_benchmark.md) | Step 3 코드 생성 모델 A/B | 🟢 중간 | 1–2d | 없음 (04 활용 가능) |
+| [07](./07_vision_multimodal_input.md) | Vision 멀티모달 입력 (이미지 → 핀맵 자동 추출) | ✅ 완료 | — | — |
 
 ## 권장 실행 순서
 
@@ -69,6 +70,6 @@ flowchart LR
 
 - **QLoRA 학습** — Task 04 데이터 + 사내 리뷰 100건 수집 후
 - **사내 리뷰 자동 아카이브** — Slack `#circuit-review` 채널 봇
-- **스키매틱 이미지 입력** (Phase 2) — Auto-SPICE/EEschematic 패턴
+- ~~**스키매틱 이미지 입력** (Phase 2)~~ → **✅ Task 07 완료** (Gemma 4 31B 멀티모달 확인 후 즉시 적용)
 - **React 프로덕션 UI** — Streamlit MVP 이후
 - **Knowledge Graph 마이그레이션** — Rule Engine이 폭발적으로 늘어날 때
