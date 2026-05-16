@@ -20,7 +20,7 @@ from rank_bm25 import BM25Okapi
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_DIR = Path("/Users/younlea/source_code/MotorDriveForge")
+BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CHUNKS_DIR = BASE_DIR / "dataset/chunks"
 DEFAULT_INDEX_DIR = BASE_DIR / "dataset/bm25_index"
 

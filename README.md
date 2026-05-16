@@ -125,32 +125,111 @@ git submodule update --init --recursive   # 오픈소스 6개 프로젝트 다�
 
 ### 3. RAG 파이프라인 구축
 
-```bash
-pip install pdfplumber sentence-transformers qdrant-client rank_bm25 tqdm
+> **모든 명령은 프로젝트 루트(`MotorDriveForge/`)에서 실행합니다.**
 
-# [소스 1] ST 공식 PDF → 텍스트
+#### 3-1. Python 가상환경 준비
+
+```bash
+# 프로젝트 루트에서 실행
+cd /home/robot/source-code/MotorDriveForge
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install pdfplumber sentence-transformers qdrant-client rank_bm25 tqdm lxml
+```
+
+#### 3-2. Qdrant 벡터 DB 실행 (Docker)
+
+```bash
+# 프로젝트 루트에서 실행
+cd /home/robot/source-code/MotorDriveForge
+
+docker run -d --name qdrant \
+  -p 6333:6333 \
+  -v qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
+
+# 실행 확인
+curl http://localhost:6333/healthz
+```
+
+#### 3-3. 소스별 파싱 → 청킹
+
+각 스크립트는 **프로젝트 루트를 자동 감지**합니다. 실행 디렉토리에 무관하게 동작합니다.
+
+```bash
+# 프로젝트 루트에서 실행
+cd /home/robot/source-code/MotorDriveForge
+
+# [소스 1] ST 공식 PDF → 텍스트 파일
+#   입력: dataset/official_docs/**/*.pdf  (14건)
+#   출력: dataset/parsed_text/{카테고리}/{파일명}.txt
 python scripts/parse_pdfs.py
 
-# [소스 1] PDF 텍스트 → 청킹
+# [소스 1] PDF 텍스트 → 청크 JSONL
+#   입력: dataset/parsed_text/**/*.txt
+#   출력: dataset/chunks/{파일명}_chunks.jsonl
 python scripts/chunk_docs.py
 
-# [소스 2] 오픈소스 핀 연결 정보 추출 → 청킹
-#   STM32CubeG4 .ioc (117개) + stm32-esc pinmap + moteus pinout
-#   + VESC hwconf + flatmcu KiCad netlist → dataset/chunks/opensource_pin_chunks.jsonl
+# [소스 2] 오픈소스 핀 연결 정보 추출 → 청크 JSONL
+#   입력: dataset/opensource/ (STM32CubeG4 .ioc 117개, stm32-esc pinmap,
+#          moteus pinout.txt, VESC hwconf, flatmcu KiCad netlist)
+#   출력: dataset/chunks/opensource_pin_chunks.jsonl
+#   ※ git submodule이 초기화되어 있어야 합니다
 python scripts/parse_opensource_code.py
+```
 
-# Qdrant 실행 (Docker)
-docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+#### 3-4. 임베딩 → Qdrant 적재 + BM25 인덱스
 
-# 임베딩 → Qdrant 적재 (PDF 청크 + 오픈소스 핀 청크 동시 처리)
+```bash
+# 프로젝트 루트에서 실행
+cd /home/robot/source-code/MotorDriveForge
+
+# BGE-M3 dense 임베딩 → Qdrant collection 'stm32g4_docs' 적재
+#   입력: dataset/chunks/*_chunks.jsonl  (PDF + 오픈소스 청크 전부)
+#   출력: Qdrant collection (http://localhost:6333)
+#   ※ 첫 실행 시 BGE-M3 모델 다운로드 (~1.1GB), 시간 소요
 python scripts/embed_and_index.py
 
-# BM25 인덱스
+# BM25 역인덱스 구축 (TIM1_CH1N 같은 정확 매칭용)
+#   입력: dataset/chunks/*_chunks.jsonl
+#   출력: dataset/bm25_index/bm25_index.pkl
+#         dataset/bm25_index/doc_map.jsonl
 python scripts/build_bm25.py
+```
 
-# 핀 AF DB 생성 (CubeMX XML 없으면 폴백 테이블 사용)
+#### 3-5. 핀 AF DB 생성
+
+```bash
+# 프로젝트 루트에서 실행
+cd /home/robot/source-code/MotorDriveForge
+
+# CubeMX XML → 핀 AF DB JSON
+#   입력: dataset/official_docs/cubemx_db/STM32G4*.xml
+#         (X-CUBE-MCSDK 설치 후 수집 — 없으면 하드코딩 폴백 테이블 사용)
+#   출력: dataset/pin_af_db.json
 python scripts/parse_cubemx_xml.py
 ```
+
+#### 3-6. 파이프라인 완료 후 디렉토리 구조 확인
+
+```
+dataset/
+├── official_docs/          # 입력: ST PDF 원본 (14건)
+├── parsed_text/            # 생성: parse_pdfs.py 출력
+│   ├── misc/
+│   └── {카테고리}/
+├── chunks/                 # 생성: chunk_docs.py + parse_opensource_code.py 출력
+│   ├── *_chunks.jsonl      #   (PDF 청크)
+│   └── opensource_pin_chunks.jsonl
+├── bm25_index/             # 생성: build_bm25.py 출력
+│   ├── bm25_index.pkl
+│   └── doc_map.jsonl
+└── pin_af_db.json          # 생성: parse_cubemx_xml.py 출력
+```
+
+> **Note**: `embed_and_index.py`의 출력은 Qdrant 컨테이너 내부(`qdrant_storage` Docker volume)에 저장됩니다. `dataset/` 안에 파일로 남지 않습니다.
 
 ### 4. 서비스 실행
 

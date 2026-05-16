@@ -21,7 +21,7 @@ from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_DIR = Path("/Users/younlea/source_code/MotorDriveForge")
+BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CHUNKS_DIR = BASE_DIR / "dataset/chunks"
 COLLECTION_NAME = "stm32g4_docs"
 VECTOR_DIM = 1024

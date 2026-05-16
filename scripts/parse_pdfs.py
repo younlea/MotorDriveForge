@@ -18,7 +18,7 @@ import pdfplumber
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_DIR = Path("/Users/younlea/source_code/MotorDriveForge")
+BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT = BASE_DIR / "dataset/official_docs"
 DEFAULT_OUTPUT = BASE_DIR / "dataset/parsed_text"
 

@@ -22,7 +22,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_DIR = Path("/Users/younlea/source_code/MotorDriveForge")
+BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_XML_DIR = BASE_DIR / "dataset/official_docs/cubemx_db"
 DEFAULT_OUTPUT = BASE_DIR / "dataset/pin_af_db.json"
 
