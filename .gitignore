@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# 중간 파싱 결과 (chunks에서 재생성 가능, 불필요하게 큼)
+dataset/parsed_text/
+
+# Qdrant 벡터 DB (Docker volume — git으로 관리 안 함, Spark에서 embed_and_index.py 실행)
+qdrant_storage/
+qdrant_snapshots/
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+*.swp
+~$*
+.~lock.*
+
+# 임시 파일
+files.zip
+*.tmp
+*.log
+
+# 빌드
+dist/
+build/
