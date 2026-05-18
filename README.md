@@ -12,14 +12,16 @@ STM32G4 전용 사내 Agent 시스템 — 회로도 입력부터 완성 펌웨�
 ## 3-Step 파이프라인
 
 ```
-[입력] 핀맵 CSV  +  자연어 프롬프트
+[입력] 회로도 이미지 (선택) + 핀맵 CSV + 자연어 프롬프트
+         ↓
+[Vision] Gemma 4 31B Multimodal — 이미지 → 핀맵 자동 추출 + 초기 분석 (이미지 없으면 스킵)
          ↓
 [STEP 1] HW 설계 검증 Agent      (Gemma 4 31B Dense · Ollama)
-         3계층 검증: 인프라 → 모터 논리 → 페리페럴 제약
-         규칙엔진 + RAG + LLM → errors[] / warnings[]
-         errors > 0 → HTTP 403 차단
-         ↓ PASS only
-[STEP 2] CubeMX 자동화            (4단계 워크플로우)
+         A Rule Engine (결정론) → B Hybrid RAG → C LLM Persona Debate
+         mode=fast: Rule Engine만, errors > 0 → HTTP 403
+         mode=full(기본): A→B→C 전체, errors 있어도 자연어 설명 반환
+         ↓ PASS only (errors == 0)
+[STEP 2] CubeMX 자동화            (4단계 워크플로우, LLM 없음)
          .ioc 템플릿 수정 → CubeMX CLI → 스니펫 주입 → ZIP
          ↓
 [STEP 3] 알고리즘 통합 Agent      (Gemma 4 26B MoE · Ollama)
@@ -34,32 +36,19 @@ STM32G4 전용 사내 Agent 시스템 — 회로도 입력부터 완성 펌웨�
 
 ```
 MotorDriveForge/
-├── work/                               # Step 1/2 상세 기획 및 워크플로우
-│   ├── step1_agent_plan.md             # HW Expert Agent 상세 계획
-│   ├── step2_code_gen_plan.md          # C 코드 자동생성 파이프라인 계획
-│   ├── step1_workflow/                 # Step 1 구현 4단계 워크플로우
-│   │   ├── 01_data_collection.md
-│   │   ├── 02_rag_db_generation.md
-│   │   ├── 03_qlora_finetuning.md
-│   │   └── 04_agent_inference_core.md
-│   ├── step2_workflow/                 # Step 2 구현 4단계 워크플로우
-│   │   ├── 01_pinmap_to_ioc.md
-│   │   ├── 02_cubemx_headless_gen.md
-│   │   ├── 03_snippet_injection.md
-│   │   └── 04_project_packaging.md
-│   └── skills/                         # 구현 스킬 (Python/Shell)
-│       ├── skill_parse_pinmap_csv.py
-│       ├── skill_ioc_text_modifier.py
-│       ├── skill_cubemx_headless_runner.sh
-│       └── skill_inject_c_code.py
 ├── agent/                              # Step 1 리뷰 에이전트
-│   └── step1_review_agent.py           # 규칙엔진 + LLM + RAG
+│   ├── step1_review_agent.py           # 규칙엔진 + Vision + LLM + RAG 오케스트레이터
+│   └── personas/                       # 5 페르소나 (Task 05, 예정)
+│       ├── base.py
+│       ├── mcu_periph.py / motor_control.py / power_emi.py / safety_failsafe.py
+│       ├── moderator.py
+│       └── prompts/*.yaml
 ├── backend/                            # FastAPI 백엔드
-│   ├── main.py                         # POST /v1/review, GET /v1/status, ...
+│   ├── main.py                         # POST /v1/review (mode, schematic_image 파라미터)
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/                           # Streamlit MVP UI
-│   ├── app.py
+│   ├── app.py                          # 이미지 업로더 + CSV 보조 입력
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── golden_modules/                     # STM32G4 HAL 레퍼런스 구현체 (C/H)
@@ -68,30 +57,53 @@ MotorDriveForge/
 │   ├── bldc_6step_hall.c/.h            # Hall 인터럽트 6-Step + BRK 보호
 │   └── fdcan_motor_cmd.c/.h            # FDCAN 커맨드 파싱 (비상정지 즉시처리)
 ├── scripts/                            # 데이터 수집 & RAG 파이프라인
-│   ├── scrape_st_forum.py              # ST 커뮤니티 포럼 Q&A 수집
 │   ├── parse_pdfs.py                   # PDF → 텍스트 (pdfplumber)
 │   ├── chunk_docs.py                   # 섹션/블록/슬라이딩윈도우 청킹
 │   ├── embed_and_index.py              # BGE-M3 → Qdrant 적재
 │   ├── build_bm25.py                   # BM25 역인덱스 구축
-│   └── parse_cubemx_xml.py             # CubeMX XML → 핀 AF DB JSON
+│   ├── parse_cubemx_xml.py             # CubeMX XML → 핀 AF DB JSON
+│   ├── parse_opensource_code.py        # OSS .ioc/netlist → 청크
+│   ├── scrape_st_forum.py              # ST 커뮤니티 포럼 Q&A 수집
+│   └── scrape_ti_e2e.py                # 🆕 TI E2E 포럼 크롤러 (Task 02)
 ├── dataset/
-│   ├── official_docs/                  # ST 공식 PDF (14건, 55MB 수집 완료)
-│   ├── forum_qa/                       # 포럼 수집 결과 (st_forum_qa.jsonl)
+│   ├── official_docs/                  # ST 공식 PDF (14건)
+│   │   └── errata/                     # 🆕 G4 errata PDF (Task 03)
+│   ├── forum_qa/
+│   │   ├── st_forum_qa.jsonl           # ST 포럼 수집 결과
+│   │   └── ti_e2e/                     # 🆕 TI E2E 크롤링 결과 (Task 02)
+│   ├── synthetic/                      # 🆕 합성 망가진 스키매틱 (Task 04)
+│   │   ├── seeds/                      # EVM 정규화 JSON
+│   │   └── pairs/                      # mutation 결과 페어
+│   ├── chunks/                         # 청킹 결과 JSONL
+│   ├── bm25_index/                     # BM25 인덱스
 │   ├── multi_motor/                    # 멀티모터 설계 가이드
-│   └── opensource/                     # 오픈소스 레퍼런스 (8개 프로젝트)
-│       ├── STM32CubeG4/                # ST 공식 HAL 예제
-│       ├── flatmcu/                    # STM32G473 FOC KiCad 회로도
-│       ├── Arduino-FOC/                # SimpleFOC (submodule)
-│       ├── stm32-esc/                  # B-G431B-ESC1 (submodule)
-│       ├── moteus/                     # 로봇 관절 액추에이터 (submodule)
-│       ├── MESC_FOC_ESC/               # 하이엔드 모터 구동 (submodule)
-│       ├── bldc_vesc/                  # VESC 오픈소스 ESC (submodule)
-│       └── ODriveHardware/             # ODrive 하드웨어 회로도 (submodule)
-├── docker-compose.yml                  # Qdrant + Backend + Frontend
-├── stm32_agent_plan.md                 # 메인 설계 계획 (7차)
-├── stm32_agent_appendex.md             # Appendix A/B/C
-├── generate_ppt.py                     # PPT 자동 생성
-└── todo.md                             # 작업 현황
+│   └── opensource/                     # 오픈소스 레퍼런스 (submodules)
+│       ├── STM32CubeG4/
+│       ├── flatmcu/
+│       ├── Arduino-FOC/
+│       ├── stm32-esc/
+│       ├── moteus/
+│       ├── MESC_FOC_ESC/
+│       ├── bldc_vesc/
+│       └── ODriveHardware/
+├── tasks/                              # 작업 명세 (우선순위 순)
+│   ├── README.md                       # 의존성 Mermaid + 주차별 실행 순서
+│   ├── 01_split_review_modes.md
+│   ├── 02_ti_e2e_crawler.md
+│   ├── 03_g4_errata_ingestion.md
+│   ├── 04_synthetic_broken_schematics.md
+│   ├── 05_persona_debate.md
+│   ├── 06_codegen_benchmark.md
+│   └── 07_vision_multimodal_input.md   # ✅ 완료
+├── work/                               # Step 1/2 상세 기획 문서
+│   ├── step1_workflow/ · step2_workflow/ · skills/
+├── docker-compose.yml
+├── ARCHITECTURE.md                     # ⭐ 시스템 다이어그램·모델·데이터 카탈로그
+├── CLAUDE.md                           # ⭐ Claude Code 작업 가이드 (이 저장소 개발 규칙)
+├── stm32_agent_plan.md
+├── stm32_agent_appendex.md
+├── generate_ppt.py
+└── todo.md
 ```
 
 ---
@@ -262,11 +274,22 @@ python scripts/scrape_st_forum.py --max-items 300
 ## API 사용 예시
 
 ```bash
-# 핀 검증 요청
+# 풀 리뷰 (기본, 자연어 설명 포함)
 curl -X POST http://localhost:8000/v1/review \
   -F "chip=STM32G474RET6" \
   -F "prompt=BLDC 1개 FOC, 증분형 엔코더, FDCAN 1Mbps, 시스템 170MHz" \
-  -F "csv_file=@pinmap.csv"
+  -F "csv_file=@pinmap.csv" \
+  -F "mode=full"
+
+# 빠른 차단 모드 (CI용, Rule Engine만 실행)
+curl -X POST http://localhost:8000/v1/review \
+  -F "csv_file=@pinmap.csv" \
+  -F "mode=fast"
+
+# 회로도 이미지로 핀맵 자동 추출 + 리뷰 (Task 07 완료)
+curl -X POST http://localhost:8000/v1/review \
+  -F "schematic_image=@schematic.png" \
+  -F "prompt=BLDC FOC 설계 검토해줘"
 
 # 서비스 상태 확인
 curl http://localhost:8000/v1/status
@@ -360,7 +383,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 |------|------|------|
 | 모델 서빙 | Ollama + GGUF | 두 모델 동시 로드 (~42GB) |
 | Step 1 LLM | Gemma 4 31B Dense | Q4_K_M, ~20GB, 논리 추론·자연어 파싱 |
-| Step 3 LLM | Gemma 4 26B MoE | Q8, ~22GB, Active ~4B, 코드 생성 |
+| Step 3 LLM (1차) | Gemma 4 26B MoE | Q8, ~22GB, Active ~4B, 코드 생성 |
+| Step 3 LLM (A/B) | Qwen3-Coder 30B A3B | HAL 정확도 비교 후 채택 (Task 06) |
 | 벡터 DB | Qdrant (Docker) | hybrid search, port 6333 |
 | 임베딩 | BAAI/bge-m3 + BM25 | dense + sparse |
 | 백엔드 | FastAPI + uvicorn | port 8000 |
@@ -373,6 +397,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 상세 작업 명세 및 우선순위는 [`tasks/README.md`](./tasks/README.md)와 [`todo.md`](./todo.md)에서 관리됩니다.
 
+### ✅ 완료
+- [x] [Task 07] Vision 멀티모달 입력 — 회로도 이미지 → 핀맵 자동 추출 (2026-05-14)
+
 ### 🔴 최우선 진행 (Tasks)
 - [ ] [Task 01] Step 1 운영 모드 분리 (fast/full)
 - [ ] [Task 02] TI E2E 모터드라이버 포럼 크롤러 파이프라인 구축
@@ -380,13 +407,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 - [ ] [Task 04] 합성 망가진 스키매틱 파이프라인 구축 (평가셋 확보)
 - [ ] [Task 05] 5 페르소나 토론 시스템
 
+### 🟢 중간
+- [ ] [Task 06] Step 3 코드 생성 모델 A/B 벤치마크 (Gemma 4 26B vs Qwen3-Coder 30B)
+
 ### 🟡 일반 과제 (TODO)
 - [ ] Git submodule 6개 초기화 (`git submodule update --init --recursive`)
 - [ ] X-CUBE-MCSDK 설치 → `dataset/official_docs/cubemx_db/` XML 수집
 - [ ] ST 포럼 Q&A 수집 마무리
 - [ ] 오픈소스 FOC 코드 → Golden Module 가공·등록
 - [ ] Step 2 CubeMX 자동화 (4단계 워크플로우 구현)
-- [ ] Step 3 알고리즘 통합 에이전트 구현 ([Task 06] 코드 생성 벤치마크 포함)
+- [ ] Step 3 알고리즘 통합 에이전트 구현
 - [ ] React 18 프로덕션 UI (Streamlit MVP 이후)
 - [ ] QLoRA Fine-tuning (에러 사례 수집 후)
 
