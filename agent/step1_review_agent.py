@@ -26,6 +26,19 @@ import pandas as pd
 import requests
 from pydantic import BaseModel, Field
 
+# sentence_transformers는 embed_and_index.py와 동일한 백엔드 — 벡터 호환 보장
+try:
+    from sentence_transformers import SentenceTransformer as _ST
+    _bge_model: Optional[_ST] = None
+
+    def _get_bge_model() -> _ST:
+        global _bge_model
+        if _bge_model is None:
+            _bge_model = _ST("BAAI/bge-m3")
+        return _bge_model
+except ImportError:
+    _get_bge_model = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -558,17 +571,14 @@ ANALYSIS:
         return []
 
     def _embed(self, text: str) -> List[float]:
-        """Ollama embedding API — BGE-M3 또는 기본 임베딩."""
-        try:
-            r = requests.post(
-                f"{self.ollama_url}/api/embeddings",
-                json={"model": "bge-m3", "prompt": text},
-                timeout=30,
-            )
-            if r.status_code == 200:
-                return r.json()["embedding"]
-        except Exception:
-            pass
+        """embed_and_index.py와 동일한 sentence_transformers BAAI/bge-m3 사용.
+        Ollama bge-m3(llama.cpp)는 벡터가 다르게 나와 RAG 검색 품질 저하됨."""
+        if _get_bge_model is not None:
+            try:
+                vec = _get_bge_model().encode(text, normalize_embeddings=True)
+                return vec.tolist()
+            except Exception as e:
+                logger.warning("sentence_transformers embed failed: %s", e)
         return [0.0] * 1024
 
     def run(self, request: ReviewRequest) -> ReviewReport:
