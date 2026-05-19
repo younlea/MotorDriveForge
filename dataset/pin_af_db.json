@@ -1,0 +1,294 @@
+{
+  "STM32G474RET6": {
+    "PA8": [
+      "OPAMP6_VOUT"
+    ],
+    "PA9": [
+      "TIM1_CH2",
+      "USART1_TX",
+      "I2C3_SMBA"
+    ],
+    "PA10": [
+      "TIM1_CH3",
+      "USART1_RX",
+      "I2C3_SDA"
+    ],
+    "PA11": [
+      "TIM1_CH4",
+      "USB_DM",
+      "FDCAN1_RX"
+    ],
+    "PB13": [
+      "OPAMP4_VINP"
+    ],
+    "PB14": [
+      "TIM1_CH2N",
+      "SPI2_MISO",
+      "FDCAN2_RX"
+    ],
+    "PB15": [
+      "TIM1_CH3N",
+      "SPI2_MOSI"
+    ],
+    "PA12": [
+      "TIM1_ETR",
+      "USB_DP",
+      "FDCAN1_TX"
+    ],
+    "PB12": [
+      "OPAMP6_VINP"
+    ],
+    "PC6": [
+      "TIM8_CH1",
+      "USART6_TX",
+      "I2C4_SCL"
+    ],
+    "PC7": [
+      "OPAMP5_VOUT"
+    ],
+    "PC8": [
+      "TIM8_CH3",
+      "USART6_CK"
+    ],
+    "PC9": [
+      "TIM8_CH4",
+      "I2C3_SDA"
+    ],
+    "PA5": [
+      "SPI1_SCK",
+      "TIM8_CH1N"
+    ],
+    "PB0": [
+      "OPAMP3_VINP"
+    ],
+    "PB1": [
+      "OPAMP3_VOUT"
+    ],
+    "PA6": [
+      "OPAMP2_VOUT"
+    ],
+    "PA0": [
+      "TIM2_CH1_ETR",
+      "USART2_CTS",
+      "COMP1_INM"
+    ],
+    "PA1": [
+      "OPAMP1_VINM",
+      "TIM2_CH2"
+    ],
+    "PA2": [
+      "OPAMP1_VINP",
+      "TIM2_CH3"
+    ],
+    "PA4": [
+      "TIM3_CH2",
+      "SPI1_NSS",
+      "DAC1_OUT1"
+    ],
+    "PB4": [
+      "TIM3_CH1",
+      "SPI1_MISO"
+    ],
+    "PB5": [
+      "FDCAN2_RX",
+      "SPI1_MOSI"
+    ],
+    "PA3": [
+      "OPAMP1_VOUT"
+    ],
+    "PC0": [
+      "ADC1_IN6",
+      "ADC2_IN6"
+    ],
+    "PC1": [
+      "OPAMP6_VINM"
+    ],
+    "PC2": [
+      "ADC1_IN8",
+      "ADC2_IN8"
+    ],
+    "PC3": [
+      "OPAMP5_VINM"
+    ],
+    "PC4": [
+      "OPAMP5_VINP"
+    ],
+    "PC5": [
+      "OPAMP2_VINM"
+    ],
+    "PB8": [
+      "FDCAN1_RX",
+      "I2C1_SCL",
+      "TIM16_CH1"
+    ],
+    "PB9": [
+      "FDCAN1_TX",
+      "I2C1_SDA",
+      "TIM17_CH1"
+    ],
+    "PB6": [
+      "I2C1_SCL",
+      "FDCAN2_TX"
+    ],
+    "PA7": [
+      "OPAMP2_VINP"
+    ],
+    "PD2": [
+      "SPI1_NSS"
+    ],
+    "PB7": [
+      "I2C1_SDA",
+      "FDCAN2_RX"
+    ],
+    "PC10": [
+      "USART3_TX",
+      "SPI3_SCK"
+    ],
+    "PC11": [
+      "USART3_RX",
+      "SPI3_MISO"
+    ],
+    "PB10": [
+      "OPAMP3_VINM"
+    ],
+    "PB11": [
+      "OPAMP4_VINM"
+    ]
+  },
+  "STM32G431RBT6": {
+    "PA8": [],
+    "PA9": [
+      "TIM1_CH2",
+      "USART1_TX",
+      "I2C3_SMBA"
+    ],
+    "PA10": [
+      "TIM1_CH3",
+      "USART1_RX",
+      "I2C3_SDA"
+    ],
+    "PA11": [
+      "TIM1_CH4",
+      "USB_DM",
+      "FDCAN1_RX"
+    ],
+    "PB13": [],
+    "PB14": [
+      "TIM1_CH2N",
+      "SPI2_MISO",
+      "FDCAN2_RX"
+    ],
+    "PB15": [
+      "TIM1_CH3N",
+      "SPI2_MOSI"
+    ],
+    "PA12": [
+      "TIM1_ETR",
+      "USB_DP",
+      "FDCAN1_TX"
+    ],
+    "PB12": [],
+    "PC6": [
+      "USART6_TX",
+      "I2C4_SCL"
+    ],
+    "PC7": [],
+    "PC8": [
+      "USART6_CK"
+    ],
+    "PC9": [
+      "I2C3_SDA"
+    ],
+    "PA5": [
+      "SPI1_SCK"
+    ],
+    "PB0": [
+      "OPAMP3_VINP"
+    ],
+    "PB1": [
+      "OPAMP3_VOUT"
+    ],
+    "PA6": [
+      "OPAMP2_VOUT"
+    ],
+    "PA0": [
+      "TIM2_CH1_ETR",
+      "USART2_CTS",
+      "COMP1_INM"
+    ],
+    "PA1": [
+      "OPAMP1_VINM",
+      "TIM2_CH2"
+    ],
+    "PA2": [
+      "OPAMP1_VINP",
+      "TIM2_CH3"
+    ],
+    "PA4": [
+      "TIM3_CH2",
+      "SPI1_NSS",
+      "DAC1_OUT1"
+    ],
+    "PB4": [
+      "TIM3_CH1",
+      "SPI1_MISO"
+    ],
+    "PB5": [
+      "FDCAN2_RX",
+      "SPI1_MOSI"
+    ],
+    "PA3": [
+      "OPAMP1_VOUT"
+    ],
+    "PC0": [
+      "ADC1_IN6",
+      "ADC2_IN6"
+    ],
+    "PC1": [],
+    "PC2": [
+      "ADC1_IN8",
+      "ADC2_IN8"
+    ],
+    "PC3": [],
+    "PC4": [],
+    "PC5": [
+      "OPAMP2_VINM"
+    ],
+    "PB8": [
+      "FDCAN1_RX",
+      "I2C1_SCL",
+      "TIM16_CH1"
+    ],
+    "PB9": [
+      "FDCAN1_TX",
+      "I2C1_SDA",
+      "TIM17_CH1"
+    ],
+    "PB6": [
+      "I2C1_SCL",
+      "FDCAN2_TX"
+    ],
+    "PA7": [
+      "OPAMP2_VINP"
+    ],
+    "PD2": [
+      "SPI1_NSS"
+    ],
+    "PB7": [
+      "I2C1_SDA",
+      "FDCAN2_RX"
+    ],
+    "PC10": [
+      "USART3_TX",
+      "SPI3_SCK"
+    ],
+    "PC11": [
+      "USART3_RX",
+      "SPI3_MISO"
+    ],
+    "PB10": [
+      "OPAMP3_VINM"
+    ],
+    "PB11": []
+  }
+}
