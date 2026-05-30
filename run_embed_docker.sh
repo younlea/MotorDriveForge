@@ -9,6 +9,7 @@ docker run --rm -it \
   -v $(pwd):/app \
   -w /app \
   --network motordriveforge_default \
+  -u root \
   dgx-antigravity-corp:v2 \
   bash -c "echo '📦 필요한 파이썬 패키지를 설치 중입니다...' && \
            pip install sentence-transformers qdrant-client tqdm lxml && \
