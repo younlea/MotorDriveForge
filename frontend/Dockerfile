@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM dgx-antigravity-corp:v2
 
 WORKDIR /app
 

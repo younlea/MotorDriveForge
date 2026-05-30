@@ -9,7 +9,7 @@ docker run --rm -it \
   -v $(pwd):/app \
   -w /app \
   --network motordriveforge_default \
-  public.ecr.aws/docker/library/python:3.11-slim \
+  dgx-antigravity-corp:v2 \
   bash -c "echo '📦 필요한 파이썬 패키지를 설치 중입니다...' && \
            pip install sentence-transformers qdrant-client tqdm lxml && \
            echo '🧠 임베딩 스크립트(embed_and_index.py)를 실행합니다...' && \
