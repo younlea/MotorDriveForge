@@ -117,6 +117,18 @@ class StatusResponse(BaseModel):
     qdrant_collections: List[str]
 
 
+class ChatRequest(BaseModel):
+    chip: str
+    question: str
+    history: List[Dict[str, str]] = []
+    report_context: Dict[str, Any] = {}
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: List[str] = []
+
+
 # ---------------------------------------------------------------------------
 # 헬스체크
 # ---------------------------------------------------------------------------
@@ -273,6 +285,26 @@ async def download_ioc(filename: str):
         filename=filename,
         media_type="application/octet-stream",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/chat — Step 1 결과 기반 멀티턴 채팅
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/chat", response_model=ChatResponse, tags=["Step 1"])
+async def chat(request: ChatRequest):
+    """검증 결과 컨텍스트 + RAG + 대화 이력 → 전문가 답변."""
+    try:
+        result = get_agent().chat(
+            chip=request.chip,
+            question=request.question,
+            history=request.history,
+            report_context=request.report_context,
+        )
+        return ChatResponse(**result)
+    except Exception as e:
+        logger.exception("chat() 오류")
+        raise HTTPException(status_code=500, detail=f"채팅 에이전트 오류: {e}")
 
 
 def _build_ioc_content(

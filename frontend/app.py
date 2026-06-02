@@ -95,6 +95,7 @@ for key, default in [
     ("vision_analysis", ""),
     ("extracted_csv", ""),
     ("pasted_image_b64", None),
+    ("chat_history", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -409,6 +410,73 @@ with tab1:
             with st.expander("확정 핀 JSON 보기", expanded=False):
                 st.json(st.session_state.validated_pins)
             st.caption("Step 2 탭에서 HAL 코드를 생성할 수 있습니다.")
+
+    # ── 멀티턴 채팅 ──────────────────────────────────────────────────────────
+    if st.session_state.last_report:
+        st.divider()
+        col_chat_header, col_chat_clear = st.columns([5, 1])
+        with col_chat_header:
+            st.subheader("리뷰 결과에 대해 질문하기")
+        with col_chat_clear:
+            if st.session_state.chat_history:
+                if st.button("초기화", key="clear_chat"):
+                    st.session_state.chat_history = []
+                    st.rerun()
+
+        # 이전 대화 표시
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("sources"):
+                    with st.expander("근거 문서"):
+                        for src in msg["sources"]:
+                            st.caption(src)
+
+        # 입력창
+        if question := st.chat_input("검증 결과에 대해 질문하세요... (근거 자료도 요청 가능)"):
+            st.session_state.chat_history.append({"role": "user", "content": question, "sources": []})
+            with st.chat_message("user"):
+                st.markdown(question)
+
+            with st.chat_message("assistant"):
+                with st.spinner("답변 생성 중..."):
+                    _report = st.session_state.last_report
+                    try:
+                        _r = requests.post(
+                            f"{BACKEND_URL}/v1/chat",
+                            json={
+                                "chip": _report.get("chip", ""),
+                                "question": question,
+                                "history": [
+                                    {"role": m["role"], "content": m["content"]}
+                                    for m in st.session_state.chat_history[:-1]
+                                ],
+                                "report_context": _report,
+                            },
+                            timeout=120,
+                        )
+                        if _r.status_code == 200:
+                            _data = _r.json()
+                            _answer = _data["answer"]
+                            _sources = _data.get("sources", [])
+                        else:
+                            _answer = f"오류 {_r.status_code}: {_r.text[:200]}"
+                            _sources = []
+                    except Exception as _e:
+                        _answer = f"요청 실패: {_e}"
+                        _sources = []
+
+                st.markdown(_answer)
+                if _sources:
+                    with st.expander("근거 문서"):
+                        for src in _sources:
+                            st.caption(src)
+
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": _answer,
+                "sources": _sources,
+            })
 
 
 # ===========================================================================

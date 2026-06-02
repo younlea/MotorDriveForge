@@ -570,6 +570,98 @@ ANALYSIS:
             logger.warning("RAG query failed: %s", e)
         return []
 
+    def _rag_with_meta(self, query: str, top_k: int = 3) -> List[dict]:
+        """Qdrant 검색 — 텍스트 + 출처 메타데이터 반환."""
+        try:
+            payload = {
+                "vector": self._embed(query),
+                "limit": top_k,
+                "with_payload": True,
+            }
+            r = requests.post(
+                f"{self.qdrant_url}/collections/{self.collection}/points/search",
+                json=payload,
+                timeout=10,
+            )
+            if r.status_code == 200:
+                results = r.json().get("result", [])
+                hits = []
+                for hit in results:
+                    p = hit.get("payload", {})
+                    hits.append({
+                        "text": p.get("text", p.get("content", "")),
+                        "doc_id": p.get("doc_id", ""),
+                        "section": p.get("section", ""),
+                        "page_start": p.get("page_start", ""),
+                    })
+                return hits
+        except Exception as e:
+            logger.warning("RAG with meta failed: %s", e)
+        return []
+
+    def chat(
+        self,
+        chip: str,
+        question: str,
+        history: List[dict],
+        report_context: dict,
+    ) -> dict:
+        """멀티턴 채팅 — 검증 결과 컨텍스트 + RAG + 대화 이력 → 답변 + 출처.
+
+        Args:
+            history: [{"role": "user"|"assistant", "content": str}, ...]
+            report_context: ReviewReport.model_dump()
+        Returns:
+            {"answer": str, "sources": [str, ...]}
+        """
+        errors = report_context.get("errors", [])
+        warnings = report_context.get("warnings", [])
+        suggestions = report_context.get("suggestions", [])
+        vision = report_context.get("vision_analysis", "")
+
+        # RAG
+        rag_hits = self._rag_with_meta(f"{chip} {question}", top_k=3)
+        rag_text = "\n\n".join(h["text"] for h in rag_hits if h["text"])
+        sources = [
+            f"{h['doc_id']} — {h['section']} (p.{h['page_start']})"
+            for h in rag_hits
+            if h.get("doc_id")
+        ]
+
+        # 대화 이력 (최근 6턴)
+        history_text = "\n".join(
+            f"{'사용자' if m['role'] == 'user' else '전문가'}: {m['content']}"
+            for m in history[-6:]
+        )
+
+        system_prompt = (
+            "당신은 STM32G4 모터 드라이브 회로 전문가입니다. "
+            "이미 수행된 검증 결과와 참고 문서를 바탕으로 사용자 질문에 답하세요. "
+            "근거가 있으면 문서명과 내용을 인용하세요. 한국어로 답변하세요."
+        )
+
+        user_prompt = f"""검증 결과 요약:
+- 칩: {chip}
+- 오류: {errors if errors else '없음'}
+- 경고: {warnings if warnings else '없음'}
+- 권장: {suggestions if suggestions else '없음'}
+- Vision 분석: {vision[:300]}
+
+참고 문서:
+{rag_text if rag_text else '(RAG 결과 없음)'}
+
+대화 이력:
+{history_text if history_text else '(첫 번째 질문)'}
+
+사용자 질문: {question}"""
+
+        model = self._available_model()
+        answer = self._ollama_generate(system_prompt, user_prompt, model)
+        if not answer:
+            answer = "Ollama 서버에 연결할 수 없거나 모델이 로드되지 않았습니다."
+
+        return {"answer": answer, "sources": sources}
+
     def _embed(self, text: str) -> List[float]:
         """embed_and_index.py와 동일한 sentence_transformers BAAI/bge-m3 사용.
         Ollama bge-m3(llama.cpp)는 벡터가 다르게 나와 RAG 검색 품질 저하됨."""
