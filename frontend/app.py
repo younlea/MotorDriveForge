@@ -509,7 +509,63 @@ with tab2:
     st.header("Step 2 — CubeMX HAL 코드 생성")
 
     if not st.session_state.review_passed:
-        st.info("Step 1 핀 검증을 먼저 통과해야 합니다.")
+        st.info("Step 1 핀 검증을 통과하거나, 핀맵을 직접 입력해 바로 시작할 수 있습니다.")
+
+        col_s1_btn, _ = st.columns([1, 2])
+        with col_s1_btn:
+            if st.button("← Step 1 핀 검증으로 이동", key="go_to_step1_btn"):
+                components.html(
+                    """<script>
+                    setTimeout(function() {
+                        var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+                        if (tabs.length >= 1) { tabs[0].click(); }
+                    }, 200);
+                    </script>""",
+                    height=0,
+                )
+
+        st.divider()
+        with st.expander("핀맵 직접 입력하여 Step 2 바로 시작", expanded=True):
+            chip2 = st.selectbox("칩 선택", CHIPS, index=1, key="step2_chip")
+            csv_direct = st.text_area(
+                "핀맵 CSV (chip, pin, function, label)",
+                value=EXAMPLE_CSV.strip(),
+                height=180,
+                key="step2_csv",
+            )
+            if csv_direct:
+                try:
+                    df_d = pd.read_csv(StringIO(csv_direct))
+                    st.dataframe(df_d.head(10), use_container_width=True)
+                    st.caption(f"총 {len(df_d)}개 핀")
+                except Exception:
+                    pass
+
+            if st.button("Step 2 바로 시작 →", type="primary", key="step2_direct_btn"):
+                try:
+                    df_p = pd.read_csv(StringIO(csv_direct))
+                    pins = [
+                        {"pin": row.get("pin", ""), "function": row.get("function", ""), "label": row.get("label", "")}
+                        for _, row in df_p.iterrows()
+                    ]
+                    st.session_state.validated_pins = {
+                        "chip": chip2,
+                        "clock_mhz": 170,
+                        "crystal_mhz": 24,
+                        "motor_count": 1,
+                        "control_type": "FOC",
+                        "encoder_type": "incremental",
+                        "pwm_channels": 6,
+                        "deadtime_ns": 500,
+                        "current_sense": "internal_opamp",
+                        "comms": [],
+                        "spi_eeprom": False,
+                        "pins": pins,
+                    }
+                    st.session_state.review_passed = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"CSV 파싱 오류: {e}")
     else:
         vp = st.session_state.validated_pins
         st.success(f"Step 1 통과 — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
