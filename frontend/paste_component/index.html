@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: sans-serif; background: transparent; padding: 4px; }
+
+#zone {
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+  cursor: pointer;
+  background: #f8f9fa;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+  min-height: 80px;
+}
+#zone:focus {
+  border-color: #ff4b4b;
+  background: #fff5f5;
+  box-shadow: 0 0 0 2px rgba(255,75,75,0.2);
+}
+#zone.has-image {
+  border-color: #21c354;
+  background: #f0fff4;
+  cursor: default;
+}
+.hint { color: #888; font-size: 13px; }
+.ready-hint { color: #ff4b4b; font-size: 13px; font-weight: 600; }
+.done-hint { color: #21c354; font-size: 13px; font-weight: 600; }
+#icon { font-size: 22px; }
+#preview {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 6px;
+  display: none;
+  margin-top: 4px;
+}
+#clear-btn {
+  margin-top: 6px;
+  padding: 3px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+  color: #666;
+  display: none;
+}
+#clear-btn:hover { background: #fee; border-color: #f88; color: #c00; }
+</style>
+</head>
+<body>
+<div id="zone" tabindex="0">
+  <div id="icon">📋</div>
+  <div id="main-hint" class="hint">여기 클릭 후 Ctrl+V 로 이미지 붙여넣기</div>
+  <img id="preview" />
+  <button id="clear-btn" onclick="clearImage(event)">✕ 지우기</button>
+</div>
+
+<script>
+const zone = document.getElementById('zone');
+const icon = document.getElementById('icon');
+const mainHint = document.getElementById('main-hint');
+const preview = document.getElementById('preview');
+const clearBtn = document.getElementById('clear-btn');
+
+// Streamlit 통신
+function sendToStreamlit(value) {
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: 'streamlit:setComponentValue',
+    value: value,
+    dataType: 'json',
+  }, '*');
+}
+
+function setHeight(h) {
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: 'streamlit:setFrameHeight',
+    height: h,
+  }, '*');
+}
+
+// 준비 신호
+window.parent.postMessage({
+  isStreamlitMessage: true,
+  type: 'streamlit:componentReady',
+  apiVersion: 1,
+}, '*');
+
+setHeight(100);
+
+// 클릭 시 포커스
+zone.addEventListener('click', () => {
+  if (!zone.classList.contains('has-image')) {
+    zone.focus();
+  }
+});
+
+zone.addEventListener('focus', () => {
+  if (!zone.classList.contains('has-image')) {
+    icon.textContent = '📋';
+    mainHint.className = 'ready-hint';
+    mainHint.textContent = '이제 Ctrl+V 로 붙여넣기 하세요';
+  }
+});
+
+zone.addEventListener('blur', () => {
+  if (!zone.classList.contains('has-image')) {
+    mainHint.className = 'hint';
+    mainHint.textContent = '여기 클릭 후 Ctrl+V 로 이미지 붙여넣기';
+  }
+});
+
+function clearImage(e) {
+  e.stopPropagation();
+  preview.style.display = 'none';
+  preview.src = '';
+  clearBtn.style.display = 'none';
+  zone.classList.remove('has-image');
+  icon.textContent = '📋';
+  mainHint.className = 'hint';
+  mainHint.textContent = '여기 클릭 후 Ctrl+V 로 이미지 붙여넣기';
+  setHeight(100);
+  sendToStreamlit(null);
+}
+
+function handlePaste(e) {
+  const items = e.clipboardData?.items || [];
+  let imageItem = null;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      imageItem = item;
+      break;
+    }
+  }
+  if (!imageItem) return;
+
+  e.preventDefault();
+  const blob = imageItem.getAsFile();
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const b64 = ev.target.result;
+    preview.src = b64;
+    preview.style.display = 'block';
+    clearBtn.style.display = 'inline-block';
+    zone.classList.add('has-image');
+    icon.textContent = '🖼️';
+    mainHint.className = 'done-hint';
+    mainHint.textContent = '✅ 이미지 붙여넣기 완료';
+    setHeight(260);
+    sendToStreamlit(b64);
+  };
+  reader.readAsDataURL(blob);
+}
+
+zone.addEventListener('paste', handlePaste);
+document.addEventListener('paste', handlePaste);
+</script>
+</body>
+</html>

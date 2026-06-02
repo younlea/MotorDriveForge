@@ -12,20 +12,29 @@ HW 개발자용 3-Step 파이프라인 인터페이스
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from io import StringIO
+
+_paste_comp = components.declare_component(
+    "paste_image",
+    path=str(Path(__file__).parent / "paste_component"),
+)
 
 # ---------------------------------------------------------------------------
 # 설정
 # ---------------------------------------------------------------------------
 
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 OLLAMA_URL = "http://localhost:11434"
 QDRANT_URL = "http://localhost:6333"
 
@@ -85,6 +94,7 @@ for key, default in [
     ("last_report", None),
     ("vision_analysis", ""),
     ("extracted_csv", ""),
+    ("pasted_image_b64", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -120,7 +130,7 @@ with st.sidebar:
     ollama_ok = check_service(OLLAMA_URL, "/api/tags")
     qdrant_ok = check_service(QDRANT_URL, "/collections")
 
-    st.write(f"{status_icon(backend_ok)} **Backend** (`:{8000}`)")
+    st.write(f"{status_icon(backend_ok)} **Backend** (`{BACKEND_URL}`)")
     st.write(f"{status_icon(ollama_ok)} **Ollama** (`:{11434}`)")
     st.write(f"{status_icon(qdrant_ok)} **Qdrant** (`:{6333}`)")
 
@@ -231,6 +241,13 @@ with tab1:
                         pass
 
     with col_right:
+        st.markdown("**스크린샷 붙여넣기** (Ctrl+V)")
+        pasted_val = _paste_comp(key="paste_zone", default=None)
+        if pasted_val is not None:
+            st.session_state.pasted_image_b64 = pasted_val if pasted_val else None
+
+        st.divider()
+
         prompt = st.text_area(
             "자연어 요구사항 프롬프트",
             value=EXAMPLE_PROMPT,
@@ -272,7 +289,7 @@ with tab1:
     st.divider()
 
     # 입력 유효성 확인
-    has_image = schematic_image is not None
+    has_image = schematic_image is not None or bool(st.session_state.pasted_image_b64)
     has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
     can_submit = has_image or has_csv
 
@@ -310,13 +327,17 @@ with tab1:
                 files: dict = {}
                 data: dict = {"chip": chip, "prompt": prompt}
 
-                if has_image:
+                if schematic_image is not None:
                     schematic_image.seek(0)
                     files["schematic_image"] = (
                         schematic_image.name,
                         schematic_image,
                         schematic_image.type or "image/jpeg",
                     )
+                elif st.session_state.pasted_image_b64:
+                    b64_data = st.session_state.pasted_image_b64.split(",", 1)[-1]
+                    img_bytes = base64.b64decode(b64_data)
+                    files["schematic_image"] = ("pasted_image.png", img_bytes, "image/png")
 
                 if csv_file is not None:
                     csv_file.seek(0)

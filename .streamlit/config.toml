@@ -1,0 +1,11 @@
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+# 외부 접속이 필요한 경우 아래 주석 해제 후 실제 주소/포트 입력
+# serverAddress = "your-hostname-or-ip"
+# serverPort = 8501
