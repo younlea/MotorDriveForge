@@ -102,6 +102,7 @@ for key, default in [
     ("code_zip", None),
     ("step3_job_id", None),
     ("step3_result", None),
+    ("step3_hal_zip", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -775,51 +776,81 @@ export CUBEMX_PATH=/path/to/STM32CubeMX
 with tab3:
     st.header("Step 3 — 알고리즘 통합")
 
-    if not st.session_state.ioc_result:
-        st.info("Step 2 코드 생성을 먼저 완료해야 합니다.")
+    import io as _io, zipfile as _zf, json as _json, time as _time
+
+    from agent.step3_codegen_agent import select_modules as _select_modules
+
+    _MOD_DESC = {
+        "dc_motor_pid":    "dc_motor_pid — DC/FOC/PMSM PID 제어 + H-bridge PWM",
+        "bldc_6step_hall": "bldc_6step_hall — BLDC 6-step 홀센서 구동",
+        "fdcan_motor_cmd": "fdcan_motor_cmd — FDCAN 커맨드 파싱 (1Mbps)",
+        "multi_axis_sync": "multi_axis_sync — 다축 동기화",
+    }
+
+    # ── 핀맵 확보 (Step 1 결과 or 직접 입력) ─────────────────────────────────
+    vp3: Optional[Dict[str, Any]] = (
+        st.session_state.validated_pins if st.session_state.review_passed else None
+    )
+
+    if not vp3:
+        st.info("Step 1 결과가 없습니다. 아래에서 핀맵을 직접 입력하거나 JSON을 업로드하세요.")
+        with st.expander("핀맵 직접 입력 (Step 1 없이 진입)", expanded=True):
+            _col_chip3, _col_ctrl = st.columns(2)
+            with _col_chip3:
+                _chip3 = st.selectbox("칩", CHIPS, index=1, key="s3_chip")
+            with _col_ctrl:
+                _ctrl3 = st.selectbox("제어 방식", ["FOC", "PMSM", "BLDC_6step", "DC"], key="s3_ctrl")
+            _enc3  = st.selectbox("엔코더", ["incremental", "hall", "sensorless"], key="s3_enc")
+            _comms3 = st.multiselect("통신", ["fdcan", "uart", "spi"], key="s3_comms")
+            _nm3   = st.number_input("모터 수", 1, 4, 1, key="s3_nm")
+
+            _json_up = st.file_uploader("또는 validated_pins JSON 업로드", type=["json"], key="s3_json")
+            if _json_up:
+                try:
+                    vp3 = _json.loads(_json_up.read().decode())
+                    st.success(f"JSON 로드 완료 — 칩: {vp3.get('chip','?')}")
+                except Exception as _e:
+                    st.error(f"JSON 파싱 오류: {_e}")
+
+            if not vp3:
+                if st.button("이 설정으로 Step 3 진행", key="s3_manual_btn"):
+                    vp3 = {
+                        "chip": _chip3, "clock_mhz": 170, "crystal_mhz": 24,
+                        "motor_count": int(_nm3), "control_type": _ctrl3,
+                        "encoder_type": _enc3, "pwm_channels": 6,
+                        "deadtime_ns": 500, "current_sense": "internal_opamp",
+                        "comms": _comms3, "spi_eeprom": False, "pins": [],
+                    }
+                    st.session_state.validated_pins = vp3
+                    st.session_state.review_passed = True
+                    st.rerun()
     else:
-        st.success("Step 2 완료 — 알고리즘 통합 준비됨")
-
-    st.subheader("통합 예정 모듈 (Golden Module)")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("""
-**FOC 알고리즘**
-- Clarke / Park 변환
-- Space Vector PWM (SVPWM)
-- PI 전류 제어기 (d/q축)
-- 속도 PI 제어기
-""")
-    with col_b:
-        st.markdown("""
-**센서 / 보호**
-- 증분형 엔코더 (TIM encoder mode)
-- Hall sensor 6-step
-- 과전류 / 과전압 보호 (BRK)
-- 온도 모니터링
-""")
+        st.success(f"핀맵 확보 — 칩: {vp3.get('chip','?')}, 핀 수: {len(vp3.get('pins',[]))}")
 
     st.divider()
 
-    if not st.session_state.review_passed:
-        st.info("Step 1 핀 검증을 먼저 완료해야 합니다.")
-    else:
-        vp3 = st.session_state.validated_pins
+    if vp3:
 
-        # 선택될 모듈 미리 보여주기 (결정론적 — API 호출 불필요)
-        from agent.step3_codegen_agent import select_modules as _select_modules
-        preview_modules = _select_modules(vp3)
+        # ── Step 2 HAL 코드 업로드 (선택) ────────────────────────────────
+        st.subheader("Step 2 HAL 코드 업로드 (선택)")
+        st.caption("Step 2에서 CubeMX로 생성한 ZIP을 올리면 적응된 코드를 USER CODE 마커에 자동 주입합니다.")
+        _hal_zip_up = st.file_uploader(
+            "HAL 코드 ZIP 업로드 (Step 2 결과물)", type=["zip"], key="s3_hal_zip"
+        )
+        if _hal_zip_up:
+            st.session_state.step3_hal_zip = _hal_zip_up.read()
+            st.success(f"ZIP 로드 완료 — {_hal_zip_up.name}")
+        elif st.session_state.get("step3_hal_zip"):
+            st.info("이전에 업로드한 HAL ZIP이 있습니다.")
+
+        st.divider()
+
+        # ── 선택될 모듈 미리보기 ─────────────────────────────────────────
         st.subheader("선택될 Golden Module")
-        _mod_desc = {
-            "dc_motor_pid":    "dc_motor_pid — DC/FOC/PMSM PID 제어 + H-bridge PWM",
-            "bldc_6step_hall": "bldc_6step_hall — BLDC 6-step 홀센서 구동",
-            "fdcan_motor_cmd": "fdcan_motor_cmd — FDCAN 커맨드 파싱 (1Mbps)",
-            "multi_axis_sync": "multi_axis_sync — 다축 동기화",
-        }
+        preview_modules = _select_modules(vp3)
         for m in preview_modules:
-            st.markdown(f"- `{_mod_desc.get(m, m)}`")
-        st.caption("검증된 Golden Module을 핀맵에 맞게 LLM이 적응(adaptation)합니다. 핵심 로직은 변경하지 않습니다.")
+            st.markdown(f"- `{_MOD_DESC.get(m, m)}`")
+        st.caption("검증된 Golden Module을 핀맵에 맞게 LLM이 적응합니다. 핵심 로직은 변경하지 않습니다.")
 
         st.divider()
 
@@ -912,17 +943,57 @@ with tab3:
                         key=f"dl_{mod_name}_c",
                     )
 
-            # 전체 ZIP 다운로드
             st.divider()
-            import io as _io
-            import zipfile as _zf
+
+            # ── HAL 코드에 주입 (Step 2 ZIP 업로드된 경우) ───────────────
+            _hal_zip_bytes = st.session_state.get("step3_hal_zip")
+            if _hal_zip_bytes:
+                st.subheader("HAL 코드에 적응 코드 주입")
+                from agent.step3_codegen_agent import Step3Agent as _S3A
+                _injected: Dict[str, bytes] = {}
+                try:
+                    with _zf.ZipFile(_io.BytesIO(_hal_zip_bytes)) as _src_zip:
+                        for _zname in _src_zip.namelist():
+                            _raw = _src_zip.read(_zname)
+                            try:
+                                _src_txt = _raw.decode("utf-8")
+                            except Exception:
+                                _injected[_zname] = _raw
+                                continue
+                            for _mn, _mc in _mods.items():
+                                _src_txt = _S3A.inject_into_marker(_src_txt, _mc.get("c", ""), "2")
+                                _src_txt = _S3A.inject_into_marker(_src_txt, _mc.get("h", ""), "Includes")
+                            _injected[_zname] = _src_txt.encode("utf-8")
+
+                    _inj_buf = _io.BytesIO()
+                    with _zf.ZipFile(_inj_buf, "w", _zf.ZIP_DEFLATED) as _out_zip:
+                        for _mn, _mc in _mods.items():
+                            _out_zip.writestr(f"Step3_Modules/{_mn}.h", _mc.get("h", ""))
+                            _out_zip.writestr(f"Step3_Modules/{_mn}.c", _mc.get("c", ""))
+                        for _zname, _data in _injected.items():
+                            _out_zip.writestr(_zname, _data)
+
+                    st.success("주입 완료 — HAL 코드 + Step 3 모듈 통합 ZIP")
+                    st.download_button(
+                        "⬇ 통합 ZIP 다운로드 (HAL + Step 3)",
+                        data=_inj_buf.getvalue(),
+                        file_name=f"{vp3.get('chip','STM32G4')}_Integrated.zip",
+                        mime="application/zip",
+                        key="dl_integrated_zip",
+                    )
+                except Exception as _ie:
+                    st.error(f"주입 오류: {_ie}")
+            else:
+                st.info("Step 2 HAL 코드 ZIP을 업로드하면 USER CODE 마커에 자동 주입된 통합 ZIP을 다운로드할 수 있습니다.")
+
+            # ── 적응 모듈만 ZIP 다운로드 ─────────────────────────────────
             _zbuf = _io.BytesIO()
             with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
                 for _mn, _mc in _mods.items():
                     _z.writestr(f"{_mn}.h", _mc.get("h", ""))
                     _z.writestr(f"{_mn}.c", _mc.get("c", ""))
             st.download_button(
-                "⬇ 전체 ZIP 다운로드",
+                "⬇ 적응 모듈만 ZIP 다운로드",
                 data=_zbuf.getvalue(),
                 file_name=f"{vp3.get('chip','STM32G4')}_Step3_Modules.zip",
                 mime="application/zip",
@@ -932,4 +1003,5 @@ with tab3:
             if st.button("다시 실행", key="btn_step3_reset"):
                 st.session_state.step3_result = None
                 st.session_state.step3_job_id = None
+                st.session_state.step3_hal_zip = None
                 st.rerun()
