@@ -14,10 +14,14 @@ import io
 import json
 import logging
 import os
+import shutil
+import subprocess
+import tempfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import uvicorn
@@ -40,6 +44,18 @@ QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "stm32g4_docs")
 PIN_AF_DB_PATH = os.getenv("PIN_AF_DB_PATH", "")
 IOC_OUTPUT_DIR = Path(os.getenv("IOC_OUTPUT_DIR", "/tmp/ioc_outputs"))
 IOC_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+CODE_OUTPUT_DIR = Path(os.getenv("CODE_OUTPUT_DIR", "/tmp/code_outputs"))
+CODE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# CubeMX CLI 탐색 경로 (우선순위 순)
+CUBEMX_SEARCH_PATHS = [
+    os.getenv("CUBEMX_PATH", ""),
+    "/opt/STM32CubeMX/STM32CubeMX",
+    "/usr/local/STM32CubeMX/STM32CubeMX",
+    os.path.expanduser("~/STM32CubeMX/STM32CubeMX"),
+    os.path.expanduser("~/stm32cubemx/STM32CubeMX"),
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -285,6 +301,139 @@ async def download_ioc(filename: str):
         filename=filename,
         media_type="application/octet-stream",
     )
+
+
+# ---------------------------------------------------------------------------
+# CubeMX CLI 유틸리티
+# ---------------------------------------------------------------------------
+
+def _find_cubemx() -> Optional[str]:
+    """시스템에서 STM32CubeMX 실행 파일 탐색."""
+    for path in CUBEMX_SEARCH_PATHS:
+        if path and Path(path).exists():
+            return path
+    result = subprocess.run(["which", "STM32CubeMX"], capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return None
+
+
+def _run_cubemx_headless(ioc_path: Path, output_dir: Path) -> Tuple[bool, str]:
+    """CubeMX CLI를 headless 모드로 실행해 .ioc → HAL 코드 생성.
+
+    Returns:
+        (success, message)
+    """
+    cubemx = _find_cubemx()
+    if not cubemx:
+        return False, "STM32CubeMX가 설치되지 않았습니다."
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # CubeMX headless 스크립트
+    script = (
+        f"loadbmproject {ioc_path.resolve()}\n"
+        f"setproperty project.output {output_dir.resolve()}\n"
+        "generatecode\n"
+        "exit\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".script", delete=False) as f:
+        f.write(script)
+        script_path = f.name
+
+    try:
+        result = subprocess.run(
+            [cubemx, "-q", script_path],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            return True, "코드 생성 완료"
+        return False, f"CubeMX 오류: {result.stderr[:300]}"
+    except subprocess.TimeoutExpired:
+        return False, "CubeMX 실행 시간 초과 (180초)"
+    except Exception as e:
+        return False, f"CubeMX 실행 실패: {e}"
+    finally:
+        os.unlink(script_path)
+
+
+def _zip_directory(src_dir: Path, zip_name: str) -> Path:
+    """디렉토리를 ZIP으로 묶어 CODE_OUTPUT_DIR에 저장."""
+    zip_path = CODE_OUTPUT_DIR / zip_name
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file in src_dir.rglob("*"):
+            if file.is_file():
+                zf.write(file, file.relative_to(src_dir.parent))
+    return zip_path
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/generate-code — .ioc → CubeMX CLI → HAL 코드 ZIP
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/generate-code", tags=["Step 2"])
+async def generate_code(request: GenerateIocRequest):
+    """validated_pins → .ioc 생성 → CubeMX CLI → HAL 코드 ZIP 반환.
+
+    - CubeMX 미설치: 503 + {status: cubemx_not_found}
+    - CubeMX 설치됨: ZIP FileResponse
+    """
+    vp = request.validated_pins
+    chip = vp.get("chip", "STM32G474RETx")
+    pins: List[Dict[str, Any]] = vp.get("pins", [])
+
+    # CubeMX 존재 여부 먼저 확인
+    cubemx_path = _find_cubemx()
+    if not cubemx_path:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "cubemx_not_found",
+                "message": (
+                    "STM32CubeMX가 설치되지 않았습니다.\n"
+                    "설치 후 환경변수 CUBEMX_PATH에 실행 파일 경로를 지정하거나 "
+                    "/opt/STM32CubeMX/에 설치해주세요."
+                ),
+                "cubemx_path": None,
+            },
+        )
+
+    # .ioc 파일 생성
+    ioc_lines = _build_ioc_content(chip, vp, pins)
+    ioc_text = "\n".join(ioc_lines)
+    run_id = uuid.uuid4().hex[:8]
+    ioc_filename = f"{chip}_{run_id}.ioc"
+    ioc_path = IOC_OUTPUT_DIR / ioc_filename
+    ioc_path.write_text(ioc_text, encoding="utf-8")
+
+    # CubeMX headless 실행
+    output_dir = CODE_OUTPUT_DIR / f"{chip}_{run_id}"
+    success, message = _run_cubemx_headless(ioc_path, output_dir)
+    if not success:
+        raise HTTPException(status_code=500, detail=message)
+
+    # 생성된 코드 ZIP
+    zip_name = f"{chip}_MotorDrive_{run_id}.zip"
+    zip_path = _zip_directory(output_dir, zip_name)
+
+    # 임시 디렉토리 정리
+    shutil.rmtree(output_dir, ignore_errors=True)
+
+    logger.info("코드 ZIP 생성: %s", zip_name)
+    return FileResponse(
+        path=str(zip_path),
+        filename=zip_name,
+        media_type="application/zip",
+    )
+
+
+@app.get("/v1/cubemx-status", tags=["Step 2"])
+async def cubemx_status():
+    """CubeMX 설치 여부 확인."""
+    path = _find_cubemx()
+    return {"installed": path is not None, "path": path}
 
 
 # ---------------------------------------------------------------------------

@@ -99,6 +99,7 @@ for key, default in [
     ("go_to_step2", False),
     ("step2_pasted_image_b64", None),
     ("step2_extracted_pins", None),
+    ("code_zip", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -631,22 +632,15 @@ with tab2:
         vp = st.session_state.validated_pins
         st.success(f"Step 1 통과 — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
 
-        with st.expander("생성 예정 파일 목록", expanded=True):
-            st.markdown("""
-- `main.c` / `main.h` — HAL 초기화
-- `tim.c` / `tim.h` — TIM1/TIM8 PWM 설정
-- `adc.c` / `adc.h` — ADC + OPAMP 전류 센싱
-- `fdcan.c` / `fdcan.h` — FDCAN 통신
-- `spi.c` / `spi.h` — SPI EEPROM (필요 시)
-- `dma.c` / `dma.h` — DMA 설정
-""")
+        # ── Step A: .ioc 파일 생성 ────────────────────────────────────────
+        st.subheader("Step A — STM32CubeMX 프로젝트 파일(.ioc) 생성")
+        st.caption(
+            ".ioc 파일은 STM32CubeMX의 프로젝트 설정 파일입니다. "
+            "CubeMX에서 이 파일을 열면 핀 배치·클럭·페리페럴 설정을 확인하고 "
+            "HAL 초기화 코드(main.c, tim.c 등)를 생성할 수 있습니다."
+        )
 
-        if st.button(
-            "CubeMX 코드 생성",
-            type="primary",
-            disabled=not backend_ok,
-            key="btn_gen_ioc",
-        ):
+        if st.button(".ioc 파일 생성", type="primary", disabled=not backend_ok, key="btn_gen_ioc"):
             with st.spinner(".ioc 파일 생성 중..."):
                 try:
                     r = requests.post(
@@ -655,9 +649,7 @@ with tab2:
                         timeout=60,
                     )
                     if r.status_code == 200:
-                        result = r.json()
-                        st.session_state.ioc_result = result
-                        st.success(result.get("message", "생성 완료"))
+                        st.session_state.ioc_result = r.json()
                     else:
                         st.error(f"오류 {r.status_code}: {r.text[:300]}")
                 except Exception as e:
@@ -665,26 +657,111 @@ with tab2:
 
         if st.session_state.ioc_result:
             ioc = st.session_state.ioc_result
-            st.subheader("생성 결과")
-            st.write(f"파일명: `{ioc.get('ioc_filename', '')}`")
+            st.success(f"생성 완료 — `{ioc.get('ioc_filename', '')}`")
 
-            col_dl, _ = st.columns([1, 3])
-            with col_dl:
+            # .ioc 다운로드
+            try:
                 dl_url = f"{BACKEND_URL}{ioc.get('download_url', '')}"
-                if st.button("IOC 파일 다운로드", key="btn_dl_ioc"):
+                ioc_bytes = requests.get(dl_url, timeout=10).content
+                st.download_button(
+                    label="⬇ .ioc 파일 다운로드",
+                    data=ioc_bytes,
+                    file_name=ioc.get("ioc_filename", "output.ioc"),
+                    mime="application/octet-stream",
+                    key="btn_dl_ioc",
+                )
+            except Exception as e:
+                st.error(f"다운로드 준비 오류: {e}")
+
+            with st.expander("CubeMX GUI에서 사용하는 방법", expanded=False):
+                st.markdown("""
+1. **STM32CubeMX 실행**
+2. **File → Load Project** → 다운로드한 `.ioc` 파일 선택
+3. Pinout & Configuration 탭에서 핀 배치·페리페럴 설정 확인
+4. **Project → Generate Code** (단축키 `Alt+K`)
+5. 생성된 프로젝트 폴더를 **STM32CubeIDE / Keil / IAR** 에서 열기
+""")
+
+            st.divider()
+
+            # ── Step B: CubeMX CLI로 HAL 코드 자동 생성 ────────────────────
+            st.subheader("Step B — HAL 코드 자동 생성 및 ZIP 다운로드")
+
+            # CubeMX 설치 상태 확인
+            try:
+                _cs = requests.get(f"{BACKEND_URL}/v1/cubemx-status", timeout=5).json()
+                cubemx_installed = _cs.get("installed", False)
+                cubemx_path = _cs.get("path", None)
+            except Exception:
+                cubemx_installed = False
+                cubemx_path = None
+
+            if cubemx_installed:
+                st.success(f"STM32CubeMX 감지됨: `{cubemx_path}`")
+            else:
+                st.warning(
+                    "STM32CubeMX가 설치되지 않았습니다.  \n"
+                    "DGX Spark에 CubeMX를 설치하면 이 버튼으로 HAL 코드를 자동 생성할 수 있습니다."
+                )
+                with st.expander("CubeMX 설치 방법"):
+                    st.markdown("""
+1. [ST 공식 사이트](https://www.st.com/en/development-tools/stm32cubemx.html)에서 Linux용 설치 파일 다운로드
+2. 설치 후 `/opt/STM32CubeMX/` 에 위치하거나 환경변수 설정:
+```bash
+export CUBEMX_PATH=/path/to/STM32CubeMX
+```
+3. 백엔드 재시작 후 이 버튼이 활성화됩니다.
+""")
+
+            if st.button(
+                "HAL 코드 생성 및 ZIP 다운로드",
+                type="primary",
+                disabled=(not backend_ok or not cubemx_installed),
+                key="btn_gen_code",
+            ):
+                with st.spinner("CubeMX로 HAL 코드 생성 중... (최대 3분 소요)"):
                     try:
-                        r = requests.get(dl_url, timeout=10)
-                        if r.status_code == 200:
-                            st.download_button(
-                                label="저장",
-                                data=r.content,
-                                file_name=ioc.get("ioc_filename", "output.ioc"),
-                                mime="application/octet-stream",
-                            )
+                        _cr = requests.post(
+                            f"{BACKEND_URL}/v1/generate-code",
+                            json={"validated_pins": vp},
+                            timeout=300,
+                        )
+                        if _cr.status_code == 200:
+                            st.session_state.code_zip = {
+                                "data": _cr.content,
+                                "filename": _cr.headers.get(
+                                    "content-disposition", ""
+                                ).split("filename=")[-1].strip('"') or "MotorDrive.zip",
+                            }
+                            st.rerun()
+                        elif _cr.status_code == 503:
+                            st.error(_cr.json().get("message", "CubeMX 미설치"))
                         else:
-                            st.error("다운로드 실패")
-                    except Exception as e:
-                        st.error(f"다운로드 오류: {e}")
+                            st.error(f"오류 {_cr.status_code}: {_cr.text[:300]}")
+                    except Exception as _e:
+                        st.error(f"요청 실패: {_e}")
+
+            if st.session_state.get("code_zip"):
+                _cz = st.session_state.code_zip
+                st.success("HAL 코드 생성 완료!")
+                st.download_button(
+                    label="⬇ HAL 코드 ZIP 다운로드",
+                    data=_cz["data"],
+                    file_name=_cz["filename"],
+                    mime="application/zip",
+                    key="btn_dl_zip",
+                )
+                with st.expander("ZIP 내용물"):
+                    st.markdown("""
+```
+{chip}_MotorDrive/
+├── Core/
+│   ├── Inc/  main.h  tim.h  adc.h  fdcan.h  dma.h
+│   └── Src/  main.c  tim.c  adc.c  fdcan.c  dma.c
+├── Drivers/  STM32G4xx_HAL_Driver/
+└── {chip}_MotorDrive.ioc
+```
+""")
 
             st.caption("Step 3 탭에서 FOC 알고리즘을 삽입할 수 있습니다.")
 
