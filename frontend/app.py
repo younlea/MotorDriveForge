@@ -53,6 +53,13 @@ EXAMPLE_PROMPT = (
     "통신은 FDCAN 1Mbps 쓰고, 파라미터 저장용으로 SPI EEPROM도 연결할 거야."
 )
 
+STEP3_EXAMPLE_PROMPT = (
+    "PMSM 모터 1개를 FOC로 제어할 거야. 증분형 엔코더(A/B/Z)로 위치 피드백.\n"
+    "전류 센싱은 OPAMP 3개로 3상 샨트. 데드타임 500ns.\n"
+    "FDCAN으로 외부 명령 수신하고 속도+위치 캐스케이드 제어 필요해.\n"
+    "BRK 핀으로 하드웨어 OCP 처리하고 NTC 온도 모니터링도 추가해줘."
+)
+
 EXAMPLE_CSV = """chip,pin,function,label
 STM32G474RET6,PA8,TIM1_CH1,U_PWM_H
 STM32G474RET6,PA9,TIM1_CH2,V_PWM_H
@@ -103,6 +110,7 @@ for key, default in [
     ("step3_job_id", None),
     ("step3_result", None),
     ("step3_hal_zip", None),
+    ("step3_prompt", ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -831,6 +839,32 @@ with tab3:
 
     if vp3:
 
+        # ── 알고리즘 요구사항 프롬프트 ───────────────────────────────────
+        st.subheader("알고리즘 요구사항 프롬프트")
+        _s3_prompt = st.text_area(
+            "제어 알고리즘 요구사항을 자연어로 입력하세요",
+            value=st.session_state.step3_prompt or STEP3_EXAMPLE_PROMPT,
+            height=120,
+            help="모터 타입, 제어 방식, 센서, 보호 기능 등을 자유롭게 기술하세요. LLM이 Golden Module 적응 시 참고합니다.",
+            key="s3_prompt_input",
+        )
+        st.session_state.step3_prompt = _s3_prompt
+
+        # 프롬프트 체크리스트
+        _s3_checks = {
+            "모터 타입": any(w in _s3_prompt.lower() for w in ["pmsm", "bldc", "dc모터", "dc motor", "브러시드", "brushed"]),
+            "제어 방식": any(w in _s3_prompt.lower() for w in ["foc", "6-step", "6step", "pid", "캐스케이드", "cascade"]),
+            "피드백 센서": any(w in _s3_prompt.lower() for w in ["엔코더", "encoder", "hall", "홀", "앱솔루트", "absolute", "ssi", "센서리스"]),
+            "전류 센싱": any(w in _s3_prompt.lower() for w in ["샨트", "shunt", "opamp", "전류 센서", "current"]),
+            "보호 기능": any(w in _s3_prompt.lower() for w in ["ocp", "ovp", "brk", "watchdog", "온도", "temperature", "보호"]),
+            "통신": any(w in _s3_prompt.lower() for w in ["fdcan", "can", "uart", "spi", "i2c"]),
+        }
+        _chk_cols = st.columns(len(_s3_checks))
+        for _ci, (_lbl, _ok) in enumerate(_s3_checks.items()):
+            _chk_cols[_ci].caption(f"{'✅' if _ok else '⬜'} {_lbl}")
+
+        st.divider()
+
         # ── Step 2 HAL 코드 업로드 (선택) ────────────────────────────────
         st.subheader("Step 2 HAL 코드 업로드 (선택)")
         st.caption("Step 2에서 CubeMX로 생성한 ZIP을 올리면 적응된 코드를 USER CODE 마커에 자동 주입합니다.")
@@ -865,7 +899,10 @@ with tab3:
                 try:
                     _sr = requests.post(
                         f"{BACKEND_URL}/v1/generate-step3",
-                        json={"validated_pins": vp3},
+                        json={
+                            "validated_pins": vp3,
+                            "prompt": st.session_state.step3_prompt,
+                        },
                         timeout=30,
                     )
                     if _sr.status_code == 200:

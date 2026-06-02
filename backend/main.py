@@ -110,14 +110,14 @@ def get_step3_agent() -> Step3Agent:
     return _step3_agent
 
 
-def _run_step3_job(job_id: str, vp: Dict[str, Any]) -> None:
+def _run_step3_job(job_id: str, vp: Dict[str, Any], prompt: str = "") -> None:
     """백그라운드 스레드에서 Step 3 파이프라인 실행."""
     def _cb(pct: int, msg: str) -> None:
         _step3_jobs[job_id].update({"progress": pct, "message": msg})
 
     _step3_jobs[job_id] = {"status": "running", "progress": 0, "message": "시작 중...", "result": None}
     try:
-        result = get_step3_agent().run(vp, progress_cb=_cb)
+        result = get_step3_agent().run(vp, prompt=prompt, progress_cb=_cb)
         _step3_jobs[job_id].update({
             "status": "complete",
             "progress": 100,
@@ -480,6 +480,7 @@ async def cubemx_status():
 
 class Step3Request(BaseModel):
     validated_pins: Dict[str, Any]
+    prompt: str = ""
 
 
 @app.post("/v1/generate-step3", tags=["Step 3"])
@@ -497,7 +498,7 @@ async def generate_step3(request: Step3Request):
         "message": f"대기 중 — 선택 모듈: {', '.join(selected)}",
         "result": None,
     }
-    t = threading.Thread(target=_run_step3_job, args=(job_id, vp), daemon=True)
+    t = threading.Thread(target=_run_step3_job, args=(job_id, vp, request.prompt), daemon=True)
     t.start()
     return {"job_id": job_id, "selected_modules": selected}
 

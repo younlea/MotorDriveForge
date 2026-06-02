@@ -133,6 +133,7 @@ class Step3Agent:
         code_c: str,
         pinmap: str,
         model: str,
+        user_prompt: str = "",
     ) -> Dict[str, str]:
         """Golden Module 코드를 핀맵에 맞게 LLM으로 적응.
         핵심 로직은 유지하고 하드웨어 종속 부분(핀/타이머/OPAMP/ADC)만 교체.
@@ -145,7 +146,10 @@ class Step3Agent:
             "수정된 .h 파일을 첫 번째 ```c 블록에, .c 파일을 두 번째 ```c 블록에 출력하세요."
         )
 
-        user = f"""## 사용자 핀맵 정보
+        user = f"""## 사용자 알고리즘 요구사항
+{user_prompt if user_prompt.strip() else "(별도 요구사항 없음 — 핀맵 기반 적응만 수행)"}
+
+## 사용자 핀맵 정보
 {pinmap}
 
 ## Golden Module 원본: {module_name}.h
@@ -213,6 +217,7 @@ class Step3Agent:
     def run(
         self,
         vp: Dict[str, Any],
+        prompt: str = "",
         progress_cb: Optional[Callable[[int, str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -267,6 +272,7 @@ class Step3Agent:
                 raw.get("c", ""),
                 pinmap,
                 model,
+                user_prompt=prompt,
             )
             modules_out[name] = {
                 "h": adapted.get("h", raw.get("h", "")),
