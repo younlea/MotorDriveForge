@@ -96,6 +96,7 @@ for key, default in [
     ("extracted_csv", ""),
     ("pasted_image_b64", None),
     ("chat_history", []),
+    ("go_to_step2", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -409,7 +410,28 @@ with tab1:
         if not errors and st.session_state.validated_pins:
             with st.expander("확정 핀 JSON 보기", expanded=False):
                 st.json(st.session_state.validated_pins)
-            st.caption("Step 2 탭에서 HAL 코드를 생성할 수 있습니다.")
+
+            # Step 2 이동 버튼
+            if st.button(
+                "Step 2: HAL 코드 생성하기 →",
+                type="primary",
+                key="go_to_step2_btn",
+                use_container_width=True,
+            ):
+                st.session_state.go_to_step2 = True
+                st.rerun()
+
+        if st.session_state.get("go_to_step2"):
+            st.session_state.go_to_step2 = False
+            components.html(
+                """<script>
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+                    if (tabs.length >= 2) { tabs[1].click(); }
+                }, 200);
+                </script>""",
+                height=0,
+            )
 
     # ── 멀티턴 채팅 ──────────────────────────────────────────────────────────
     if st.session_state.last_report:
