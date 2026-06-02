@@ -100,6 +100,8 @@ for key, default in [
     ("step2_pasted_image_b64", None),
     ("step2_extracted_pins", None),
     ("code_zip", None),
+    ("step3_job_id", None),
+    ("step3_result", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -800,26 +802,134 @@ with tab3:
 
     st.divider()
 
-    algo_option = st.selectbox(
-        "알고리즘 선택",
-        [
-            "BLDC FOC (증분형 엔코더)",
-            "BLDC FOC (홀센서)",
-            "BLDC FOC (센서리스 BEMF)",
-            "PMSM FOC (증분형 엔코더)",
-        ],
-        disabled=not st.session_state.ioc_result,
-    )
+    if not st.session_state.review_passed:
+        st.info("Step 1 핀 검증을 먼저 완료해야 합니다.")
+    else:
+        vp3 = st.session_state.validated_pins
 
-    if st.button(
-        "알고리즘 통합 실행 (준비 중)",
-        disabled=True,
-        key="btn_integrate",
-        help="Step 3 통합 기능은 구현 예정입니다. (Gemma-4-31B + Golden Module RAG)",
-    ):
-        pass
+        # 선택될 모듈 미리 보여주기 (결정론적 — API 호출 불필요)
+        from agent.step3_codegen_agent import select_modules as _select_modules
+        preview_modules = _select_modules(vp3)
+        st.subheader("선택될 Golden Module")
+        _mod_desc = {
+            "dc_motor_pid":    "dc_motor_pid — DC/FOC/PMSM PID 제어 + H-bridge PWM",
+            "bldc_6step_hall": "bldc_6step_hall — BLDC 6-step 홀센서 구동",
+            "fdcan_motor_cmd": "fdcan_motor_cmd — FDCAN 커맨드 파싱 (1Mbps)",
+            "multi_axis_sync": "multi_axis_sync — 다축 동기화",
+        }
+        for m in preview_modules:
+            st.markdown(f"- `{_mod_desc.get(m, m)}`")
+        st.caption("검증된 Golden Module을 핀맵에 맞게 LLM이 적응(adaptation)합니다. 핵심 로직은 변경하지 않습니다.")
 
-    st.info(
-        "Step 3는 Gemma-4-31B (Q4_K_M) 모델과 Golden Module RAG를 사용하여 "
-        "USER CODE BEGIN/END 영역에 FOC 알고리즘을 자동 삽입합니다. (구현 예정)"
-    )
+        st.divider()
+
+        # ── 실행 버튼 ─────────────────────────────────────────────────────
+        if not st.session_state.get("step3_job_id") and not st.session_state.get("step3_result"):
+            if st.button(
+                "Step 3 실행 — Golden Module 적응 코드 생성",
+                type="primary",
+                disabled=not backend_ok,
+                key="btn_step3_run",
+            ):
+                try:
+                    _sr = requests.post(
+                        f"{BACKEND_URL}/v1/generate-step3",
+                        json={"validated_pins": vp3},
+                        timeout=30,
+                    )
+                    if _sr.status_code == 200:
+                        st.session_state.step3_job_id = _sr.json()["job_id"]
+                        st.rerun()
+                    else:
+                        st.error(f"오류 {_sr.status_code}: {_sr.text[:200]}")
+                except Exception as _e:
+                    st.error(f"요청 실패: {_e}")
+
+        # ── 진행바 (폴링) ─────────────────────────────────────────────────
+        if st.session_state.get("step3_job_id") and not st.session_state.get("step3_result"):
+            import time as _time
+            _jid = st.session_state.step3_job_id
+            try:
+                _jr = requests.get(f"{BACKEND_URL}/v1/step3-status/{_jid}", timeout=5)
+                _jd = _jr.json()
+            except Exception:
+                _jd = {"status": "running", "progress": 0, "message": "연결 중..."}
+
+            _pct = _jd.get("progress", 0)
+            _msg = _jd.get("message", "")
+            _jst = _jd.get("status", "running")
+
+            st.progress(_pct / 100, text=_msg)
+            st.caption(f"진행: {_pct}%  |  상태: {_jst}")
+
+            if _jst == "complete":
+                st.session_state.step3_result = _jd.get("result")
+                st.session_state.step3_job_id = None
+                st.rerun()
+            elif _jst == "error":
+                st.error(f"오류: {_msg}")
+                st.session_state.step3_job_id = None
+            else:
+                _time.sleep(2)
+                st.rerun()
+
+        # ── 결과 표시 + 다운로드 ──────────────────────────────────────────
+        if st.session_state.get("step3_result"):
+            _res = st.session_state.step3_result
+            _mods = _res.get("modules", {})
+            _sel  = _res.get("selected", [])
+
+            st.success(f"완료 — {len(_mods)}개 모듈 적응 완료: {', '.join(_sel)}")
+
+            # 핀맵 요약 확인
+            with st.expander("적용된 핀맵 요약", expanded=False):
+                st.text(_res.get("pinmap_summary", ""))
+
+            # 각 모듈 코드 보기 + 다운로드
+            for mod_name, mod_code in _mods.items():
+                with st.expander(f"📄 {mod_name} 적응 코드", expanded=False):
+                    _tabs = st.tabs([f"{mod_name}.h", f"{mod_name}.c"])
+                    with _tabs[0]:
+                        st.code(mod_code.get("h", ""), language="c")
+                    with _tabs[1]:
+                        st.code(mod_code.get("c", ""), language="c")
+
+                col_h, col_c, _ = st.columns([1, 1, 3])
+                with col_h:
+                    st.download_button(
+                        f"⬇ {mod_name}.h",
+                        data=mod_code.get("h", "").encode(),
+                        file_name=f"{mod_name}.h",
+                        mime="text/plain",
+                        key=f"dl_{mod_name}_h",
+                    )
+                with col_c:
+                    st.download_button(
+                        f"⬇ {mod_name}.c",
+                        data=mod_code.get("c", "").encode(),
+                        file_name=f"{mod_name}.c",
+                        mime="text/plain",
+                        key=f"dl_{mod_name}_c",
+                    )
+
+            # 전체 ZIP 다운로드
+            st.divider()
+            import io as _io
+            import zipfile as _zf
+            _zbuf = _io.BytesIO()
+            with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
+                for _mn, _mc in _mods.items():
+                    _z.writestr(f"{_mn}.h", _mc.get("h", ""))
+                    _z.writestr(f"{_mn}.c", _mc.get("c", ""))
+            st.download_button(
+                "⬇ 전체 ZIP 다운로드",
+                data=_zbuf.getvalue(),
+                file_name=f"{vp3.get('chip','STM32G4')}_Step3_Modules.zip",
+                mime="application/zip",
+                key="dl_step3_zip",
+            )
+
+            if st.button("다시 실행", key="btn_step3_reset"):
+                st.session_state.step3_result = None
+                st.session_state.step3_job_id = None
+                st.rerun()

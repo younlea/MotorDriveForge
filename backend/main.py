@@ -30,9 +30,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+import threading
+
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.step1_review_agent import ReviewAgent, ReviewReport, ReviewRequest
+from agent.step3_codegen_agent import Step3Agent
 
 # ---------------------------------------------------------------------------
 # 설정
@@ -82,6 +85,10 @@ app.add_middleware(
 )
 
 _agent: Optional[ReviewAgent] = None
+_step3_agent: Optional[Step3Agent] = None
+
+# Step 3 job store: job_id → {status, progress, message, result}
+_step3_jobs: Dict[str, Dict] = {}
 
 
 def get_agent() -> ReviewAgent:
@@ -94,6 +101,37 @@ def get_agent() -> ReviewAgent:
             collection=QDRANT_COLLECTION,
         )
     return _agent
+
+
+def get_step3_agent() -> Step3Agent:
+    global _step3_agent
+    if _step3_agent is None:
+        _step3_agent = Step3Agent(ollama_url=OLLAMA_URL)
+    return _step3_agent
+
+
+def _run_step3_job(job_id: str, vp: Dict[str, Any]) -> None:
+    """백그라운드 스레드에서 Step 3 파이프라인 실행."""
+    def _cb(pct: int, msg: str) -> None:
+        _step3_jobs[job_id].update({"progress": pct, "message": msg})
+
+    _step3_jobs[job_id] = {"status": "running", "progress": 0, "message": "시작 중...", "result": None}
+    try:
+        result = get_step3_agent().run(vp, progress_cb=_cb)
+        _step3_jobs[job_id].update({
+            "status": "complete",
+            "progress": 100,
+            "message": "Step 3 완료",
+            "result": result,
+        })
+    except Exception as e:
+        logger.exception("Step 3 job 오류: %s", job_id)
+        _step3_jobs[job_id].update({
+            "status": "error",
+            "progress": 0,
+            "message": str(e),
+            "result": None,
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +472,49 @@ async def cubemx_status():
     """CubeMX 설치 여부 확인."""
     path = _find_cubemx()
     return {"installed": path is not None, "path": path}
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — Golden Module 적응 코드젠
+# ---------------------------------------------------------------------------
+
+class Step3Request(BaseModel):
+    validated_pins: Dict[str, Any]
+
+
+@app.post("/v1/generate-step3", tags=["Step 3"])
+async def generate_step3(request: Step3Request):
+    """Golden Module 선택 → LLM 적응 → 결과 반환 (백그라운드 job).
+    반환: {job_id, selected_modules}
+    """
+    from agent.step3_codegen_agent import select_modules
+    vp = request.validated_pins
+    job_id = uuid.uuid4().hex[:12]
+    selected = select_modules(vp)
+    _step3_jobs[job_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": f"대기 중 — 선택 모듈: {', '.join(selected)}",
+        "result": None,
+    }
+    t = threading.Thread(target=_run_step3_job, args=(job_id, vp), daemon=True)
+    t.start()
+    return {"job_id": job_id, "selected_modules": selected}
+
+
+@app.get("/v1/step3-status/{job_id}", tags=["Step 3"])
+async def step3_status(job_id: str):
+    """Step 3 job 진행 상태 조회."""
+    if job_id not in _step3_jobs:
+        raise HTTPException(status_code=404, detail="job_id를 찾을 수 없습니다.")
+    job = _step3_jobs[job_id]
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job["progress"],
+        "message": job["message"],
+        "result": job["result"] if job["status"] == "complete" else None,
+    }
 
 
 # ---------------------------------------------------------------------------
