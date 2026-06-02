@@ -97,6 +97,8 @@ for key, default in [
     ("pasted_image_b64", None),
     ("chat_history", []),
     ("go_to_step2", False),
+    ("step2_pasted_image_b64", None),
+    ("step2_extracted_pins", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -527,45 +529,104 @@ with tab2:
         st.divider()
         with st.expander("핀맵 직접 입력하여 Step 2 바로 시작", expanded=True):
             chip2 = st.selectbox("칩 선택", CHIPS, index=1, key="step2_chip")
-            csv_direct = st.text_area(
-                "핀맵 CSV (chip, pin, function, label)",
-                value=EXAMPLE_CSV.strip(),
-                height=180,
-                key="step2_csv",
-            )
-            if csv_direct:
-                try:
-                    df_d = pd.read_csv(StringIO(csv_direct))
-                    st.dataframe(df_d.head(10), use_container_width=True)
-                    st.caption(f"총 {len(df_d)}개 핀")
-                except Exception:
-                    pass
 
-            if st.button("Step 2 바로 시작 →", type="primary", key="step2_direct_btn"):
+            # ── 방법 1: 회로도 이미지 붙여넣기 → Vision 추출 ────────────────
+            st.markdown("**방법 1 — 회로도 이미지** (Ctrl+V 붙여넣기 → Vision 핀맵 자동 추출)")
+            pasted_s2 = _paste_comp(key="paste_zone_step2", default=None)
+            if pasted_s2 is not None:
+                if pasted_s2:
+                    st.session_state.step2_pasted_image_b64 = pasted_s2
+                    st.session_state.step2_extracted_pins = None
+                else:
+                    st.session_state.step2_pasted_image_b64 = None
+                    st.session_state.step2_extracted_pins = None
+
+            if st.session_state.step2_pasted_image_b64 and st.session_state.step2_extracted_pins is None:
+                if st.button("Vision으로 핀맵 추출", key="step2_vision_btn", disabled=not backend_ok):
+                    with st.spinner("Vision으로 핀맵 추출 중... (30~90초)"):
+                        try:
+                            b64_data = st.session_state.step2_pasted_image_b64.split(",", 1)[-1]
+                            img_bytes = base64.b64decode(b64_data)
+                            _vr = requests.post(
+                                f"{BACKEND_URL}/v1/review",
+                                data={"chip": chip2, "prompt": "회로도에서 핀맵을 추출해주세요."},
+                                files={"schematic_image": ("pasted.png", img_bytes, "image/png")},
+                                timeout=180,
+                            )
+                            _body = _vr.json() if _vr.status_code == 200 else _vr.json().get("report", {})
+                            _vp = _body.get("validated_pins", {})
+                            if _vp.get("pins"):
+                                st.session_state.step2_extracted_pins = _vp
+                                st.rerun()
+                            else:
+                                st.warning("핀맵을 추출하지 못했습니다. CSV를 직접 입력해주세요.")
+                        except Exception as _e:
+                            st.error(f"Vision 추출 오류: {_e}")
+
+            if st.session_state.step2_extracted_pins:
+                _ep = st.session_state.step2_extracted_pins
+                st.success(f"Vision 추출 완료 — {len(_ep.get('pins', []))}개 핀 감지")
+                st.dataframe(pd.DataFrame(_ep.get("pins", [])), use_container_width=True)
+
+            st.divider()
+
+            # ── 방법 2: CSV 직접 입력 ────────────────────────────────────────
+            st.markdown("**방법 2 — 핀맵 CSV** (파일 업로드 또는 직접 입력)")
+            csv_input_mode2 = st.radio("입력 방식", ["파일 업로드", "직접 입력"],
+                                       horizontal=True, key="step2_csv_mode")
+            csv_direct: Optional[str] = None
+            if csv_input_mode2 == "파일 업로드":
+                _csv_up = st.file_uploader("CSV 파일 (chip, pin, function, label)",
+                                           type=["csv"], key="step2_csv_upload")
+                if _csv_up:
+                    csv_direct = _csv_up.read().decode("utf-8-sig")
+                    _csv_up.seek(0)
+                    try:
+                        st.dataframe(pd.read_csv(StringIO(csv_direct)).head(10), use_container_width=True)
+                    except Exception:
+                        pass
+            else:
+                csv_direct = st.text_area(
+                    "CSV 직접 입력", value=EXAMPLE_CSV.strip(), height=160, key="step2_csv_text"
+                )
+                if csv_direct:
+                    try:
+                        _df_prev = pd.read_csv(StringIO(csv_direct))
+                        st.dataframe(_df_prev.head(10), use_container_width=True)
+                        st.caption(f"총 {len(_df_prev)}개 핀")
+                    except Exception:
+                        pass
+
+            st.divider()
+            _can_start = (
+                st.session_state.step2_extracted_pins is not None
+                or bool(csv_direct and csv_direct.strip())
+            )
+            if st.button("Step 2 바로 시작 →", type="primary",
+                         key="step2_direct_btn", disabled=not _can_start):
                 try:
-                    df_p = pd.read_csv(StringIO(csv_direct))
-                    pins = [
-                        {"pin": row.get("pin", ""), "function": row.get("function", ""), "label": row.get("label", "")}
-                        for _, row in df_p.iterrows()
-                    ]
-                    st.session_state.validated_pins = {
-                        "chip": chip2,
-                        "clock_mhz": 170,
-                        "crystal_mhz": 24,
-                        "motor_count": 1,
-                        "control_type": "FOC",
-                        "encoder_type": "incremental",
-                        "pwm_channels": 6,
-                        "deadtime_ns": 500,
-                        "current_sense": "internal_opamp",
-                        "comms": [],
-                        "spi_eeprom": False,
-                        "pins": pins,
-                    }
+                    if st.session_state.step2_extracted_pins:
+                        _vp2 = st.session_state.step2_extracted_pins.copy()
+                        _vp2["chip"] = chip2
+                    else:
+                        _df2 = pd.read_csv(StringIO(csv_direct))
+                        _vp2 = {
+                            "chip": chip2,
+                            "clock_mhz": 170, "crystal_mhz": 24,
+                            "motor_count": 1, "control_type": "FOC",
+                            "encoder_type": "incremental", "pwm_channels": 6,
+                            "deadtime_ns": 500, "current_sense": "internal_opamp",
+                            "comms": [], "spi_eeprom": False,
+                            "pins": [
+                                {"pin": r.get("pin", ""), "function": r.get("function", ""), "label": r.get("label", "")}
+                                for _, r in _df2.iterrows()
+                            ],
+                        }
+                    st.session_state.validated_pins = _vp2
                     st.session_state.review_passed = True
                     st.rerun()
-                except Exception as e:
-                    st.error(f"CSV 파싱 오류: {e}")
+                except Exception as _e:
+                    st.error(f"파싱 오류: {_e}")
     else:
         vp = st.session_state.validated_pins
         st.success(f"Step 1 통과 — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
