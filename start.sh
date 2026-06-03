@@ -103,15 +103,14 @@ cmd_status() {
     # Ollama 확인
     echo ""
     echo "[ Ollama ]"
-    if curl -s --max-time 3 "$OLLAMA_URL/api/tags" > /dev/null 2>&1; then
+    if port_open 11434; then
         local models
-        models=$(curl -s "$OLLAMA_URL/api/tags" \
+        models=$(curl -s http://localhost:11434/api/tags \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(m['name'] for m in d.get('models',[])[:4]))" 2>/dev/null || echo "?")
-        ok "Ollama       $OLLAMA_URL"
+        ok "Ollama       :11434 (Docker 컨테이너)"
         info "  로드된 모델: $models"
     else
-        warn "Ollama       응답 없음 ($OLLAMA_URL)"
-        info "  'ollama serve' 실행 후 재확인하세요."
+        warn "Ollama       :11434 오프라인"
     fi
     echo ""
 }

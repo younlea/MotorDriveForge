@@ -3,6 +3,28 @@ version: "3.9"
 services:
 
   # -------------------------------------------------------------------------
+  # Ollama — LLM 서버 (GPU 접근, Spark 호스트의 모델 디렉토리 마운트)
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: stm32_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${OLLAMA_MODELS_DIR:-~/.ollama}:/root/.ollama  # Spark에 저장된 모델 마운트
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    runtime: nvidia                                     # NVIDIA Container Toolkit
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/11434' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
   # Qdrant 벡터 DB
   # -------------------------------------------------------------------------
   qdrant:
@@ -34,28 +56,29 @@ services:
       dockerfile: backend/Dockerfile
     container_name: stm32_backend
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_URL=http://ollama:11434
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:-stm32g4_docs}
       - PIN_AF_DB_PATH=/app/agent/pin_af_db.json
       - IOC_OUTPUT_DIR=/tmp/ioc_outputs
+      - CODE_OUTPUT_DIR=/tmp/code_outputs
     volumes:
       - ioc_outputs:/tmp/ioc_outputs
       - ./agent:/app/agent:ro
     depends_on:
+      ollama:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
-      interval: 15s
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8000' 2>/dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"  # Ollama가 호스트에서 실행될 때
 
   # -------------------------------------------------------------------------
   # Streamlit 프론트엔드
