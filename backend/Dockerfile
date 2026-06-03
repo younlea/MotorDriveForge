@@ -1,12 +1,9 @@
-FROM python:3.11-slim
+FROM dgx-antigravity-corp:v2
 
 WORKDIR /app
+USER root
 
-# 시스템 의존성
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+
 
 # Python 의존성 먼저 설치 (레이어 캐시 활용)
 # docker-compose build context = 프로젝트 루트
