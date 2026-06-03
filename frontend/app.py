@@ -318,7 +318,25 @@ with tab1:
     if has_image:
         st.success("회로도 이미지 감지 — Gemma 4 31B Vision이 핀맵을 자동 추출합니다.")
 
-    btn_label = "검증 실행 (Vision + Rule Engine + RAG + LLM)" if has_image else "검증 실행 (Rule Engine + RAG + LLM)"
+    review_mode = st.radio(
+        "검증 모드",
+        ["🔍 Full review (기본 — LLM 자연어 설명 포함)", "⚡ Fast review (CI용 — Rule Engine만)"],
+        horizontal=True,
+        help="Fast: 핀 충돌·AF 오류만 즉시 검출 (LLM 없음). Full: Rule Engine + RAG + LLM 전체 분석.",
+    )
+    mode_value = "fast" if "Fast" in review_mode else "full"
+
+    if mode_value == "fast":
+        st.caption("⚡ Fast 모드: Rule Engine만 실행합니다. errors 있으면 즉시 차단 (HTTP 403).")
+    else:
+        st.caption("🔍 Full 모드: Rule Engine + RAG + LLM 전체 실행. errors 있어도 자연어 설명과 함께 결과를 반환합니다.")
+
+    if has_image and mode_value == "fast":
+        st.info("Fast 모드에서는 이미지 Vision 분석을 건너뜁니다. CSV를 직접 입력해주세요.")
+
+    btn_label = "검증 실행 (Vision + Rule Engine + RAG + LLM)" if (has_image and mode_value == "full") else (
+        "검증 실행 (Rule Engine + RAG + LLM)" if mode_value == "full" else "검증 실행 (Rule Engine only — Fast)"
+    )
 
     if st.button(
         btn_label,
@@ -341,7 +359,7 @@ with tab1:
             try:
                 # multipart/form-data 조립
                 files: dict = {}
-                data: dict = {"chip": chip, "prompt": prompt}
+                data: dict = {"chip": chip, "prompt": prompt, "mode": mode_value}
 
                 if schematic_image is not None:
                     schematic_image.seek(0)
@@ -370,11 +388,14 @@ with tab1:
 
                 if r.status_code == 200:
                     report = r.json()
-                    st.session_state.review_passed = True
+                    # full 모드: errors 있어도 200 반환 — errors 유무로 통과 여부 판단
+                    has_errors = bool(report.get("errors"))
+                    st.session_state.review_passed = not has_errors
                     st.session_state.validated_pins = report.get("validated_pins", {})
                     st.session_state.last_report = report
                     st.session_state.vision_analysis = report.get("vision_analysis", "")
                 elif r.status_code == 403:
+                    # fast 모드: errors 있으면 403
                     body = r.json()
                     report = body.get("report", body)
                     st.session_state.review_passed = False

@@ -21,7 +21,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import requests
 import uvicorn
@@ -243,6 +243,7 @@ async def review(
     ),
     csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV (선택 — 이미지가 없을 때 필수)"),
     pinmap_csv: Optional[str] = Form(None, description="CSV 문자열 직접 입력 (선택)"),
+    mode: Literal["fast", "full"] = Form("full", description="fast: Rule Engine만 (CI용). full: 전체 LLM 리뷰 (기본)."),
 ):
     """
     회로도 이미지 + 자연어 프롬프트 → 검증 리포트.
@@ -250,10 +251,10 @@ async def review(
     입력 우선순위:
       1. schematic_image → Gemma 4 31B Vision이 핀맵 자동 추출
       2. csv_file 또는 pinmap_csv → 직접 입력 CSV 사용
-      (이미지와 CSV 동시 제공 시: 직접 CSV 우선, Vision 분석은 LLM 컨텍스트에만 포함)
 
-    - errors[] > 0 이면 HTTP 403 반환.
-    - vision_analysis 필드에 이미지 분석 결과 포함.
+    mode:
+      - fast: Rule Engine만 실행. errors > 0 이면 HTTP 403.
+      - full: Vision + Rule Engine + RAG + LLM. errors 있어도 HTTP 200 (LLM 설명 포함).
     """
     # 이미지 → base64
     image_b64: Optional[str] = None
@@ -282,6 +283,7 @@ async def review(
         pinmap_csv=csv_text,
         prompt=prompt,
         schematic_image_b64=image_b64,
+        mode=mode,
     )
 
     try:
@@ -290,7 +292,9 @@ async def review(
         logger.exception("ReviewAgent.run() 오류")
         raise HTTPException(status_code=500, detail=f"검증 에이전트 오류: {e}")
 
-    if report.errors:
+    # fast 모드: errors 있으면 403 (CI 게이트)
+    # full 모드: errors 있어도 200 (LLM 자연어 설명 포함)
+    if report.errors and mode == "fast":
         return JSONResponse(
             status_code=403,
             content={

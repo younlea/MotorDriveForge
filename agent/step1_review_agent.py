@@ -56,6 +56,10 @@ class ReviewRequest(BaseModel):
         None,
         description="회로도 이미지 base64 인코딩 (JPEG/PNG). 제공 시 Vision 분석 수행.",
     )
+    mode: str = Field(
+        default="full",
+        description="'fast': Rule Engine만 실행 (CI용). 'full': Rule Engine + RAG + LLM (기본).",
+    )
 
 
 class ReviewReport(BaseModel):
@@ -725,6 +729,16 @@ ANALYSIS:
             requirements.chip = request.chip
 
         rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
+
+        # fast 모드: Rule Engine 결과만 즉시 반환 (LLM/RAG 호출 없음)
+        if request.mode == "fast":
+            return ReviewReport(
+                chip=request.chip,
+                errors=rule_errors,
+                warnings=rule_warnings,
+                validated_pins=self._build_validated_pins(pinmap_df, requirements),
+                vision_analysis=vision_analysis,
+            )
 
         # ── [B] Hybrid RAG — Rule Engine 키워드 + Vision 분석으로 쿼리 보강 ──
         keyword_hints = ""
