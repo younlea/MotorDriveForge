@@ -66,7 +66,7 @@ services:
       dockerfile: Dockerfile
     container_name: stm32_frontend
     ports:
-      - "8501:8501"
+      - "${FRONTEND_PORT:-8501}:8501"
     environment:
       - BACKEND_URL=http://backend:8000
     depends_on:
@@ -74,10 +74,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 15s
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8501' 2>/dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 6
       start_period: 30s
 
 volumes:
