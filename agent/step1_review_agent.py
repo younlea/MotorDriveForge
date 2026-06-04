@@ -252,7 +252,7 @@ class ReviewAgent:
             r = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=None,
+                timeout=300,  # LLM Debate는 생성량이 많으므로 넉넉하게
             )
             r.raise_for_status()
             return r.json().get("response", "")
@@ -272,13 +272,13 @@ class ReviewAgent:
             "images": [image_b64],
             "stream": False,
             "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
-            "options": {"temperature": 0.1, "num_predict": 1024},
+            "options": {"temperature": 0.1, "num_predict": 600},  # CSV+SUMMARY에 충분
         }
         try:
             r = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=None,
+                timeout=150,  # 모델 첫 로드(~60s) + 추론(~40s) + 마진
             )
             r.raise_for_status()
             return r.json().get("response", "")
@@ -298,42 +298,41 @@ class ReviewAgent:
         pinmap_csv: chip,pin,function,label 형식 CSV 문자열
         vision_analysis: 이미지에서 추출한 초기 분석 텍스트 (한국어)
         """
-        chip_hint_text = f"\n타겟 칩 힌트: {chip_hint}" if chip_hint else ""
-        vision_prompt = f"""당신은 STM32G4 모터 드라이버 회로도에서 핀맵을 추출하는 OCR 전문가입니다.
-첨부된 회로도 이미지에서 칩과 핀 연결 정보만 빠르게 추출하세요.{chip_hint_text}
-사용자 요구사항: {prompt}
-
-아래 형식으로 정확히 출력하세요:
-
-CHIP: <칩명, 예: STM32G474RET6>
-
-CSV:
-chip,pin,function,label
-<chip>,<pin>,<function>,<label>
-... (모든 핀 나열)
-
-SUMMARY:
-<2~3문장으로 핵심 구성만 간단히. 예: "FOC 제어용 TIM1 상보 PWM 6채널, OPAMP 전류 감지 3채널, FDCAN 통신 사용." 상세 분석/문제점 지적은 하지 말 것 — 이후 단계에서 수행됨>
-
-주의:
-- 핀맵 추출이 핵심 작업. SUMMARY는 짧게.
-- function은 STM32 HAL 형식으로 (예: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1)
-- 이미지에서 명확히 보이는 핀만 포함, 불확실한 핀은 제외
-- CSV 섹션은 헤더 포함 순수 CSV만, 설명 추가 금지"""
+        vision_prompt = (
+            "You are an expert at reading STM32 motor driver schematics and extracting pin assignments.\n"
+            f"Target chip: {chip_hint or 'STM32G4'}\n"
+            f"User requirements: {prompt}\n\n"
+            "Output EXACTLY in this format (no extra commentary):\n\n"
+            "CHIP: <chip name, e.g. STM32G474RET6>\n\n"
+            "CSV:\n"
+            "chip,pin,function,label\n"
+            "<chip>,<pin>,<function>,<label>\n"
+            "... (all visible pins)\n\n"
+            "SUMMARY:\n"
+            "<2-3 sentences: key peripherals used (e.g. TIM1 6-ch complementary PWM, OPAMP current sense, FDCAN). "
+            "No analysis or problem identification — that is done in a later stage.>\n\n"
+            "Rules:\n"
+            "- function must use STM32 HAL notation: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1, etc.\n"
+            "- Include only pins clearly visible in the image.\n"
+            "- CSV section: header + data rows only, no prose."
+        )
 
         logger.info("Vision extraction 시작 (model=%s)", GEMMA4_VISION_MODEL)
         raw = self._ollama_multimodal(vision_prompt, image_b64, GEMMA4_VISION_MODEL)
 
-        if not raw:
-            logger.warning("Vision extraction 응답 없음")
+        if not raw or len(raw.strip()) < 30:
+            logger.warning("Vision extraction 응답 없음 또는 너무 짧음 (len=%d)", len(raw or ""))
             return "", ""
 
         # CHIP 파싱
         chip_match = re.search(r"CHIP:\s*(STM32G\w+)", raw, re.IGNORECASE)
         extracted_chip = chip_match.group(1).upper() if chip_match else chip_hint
 
-        # CSV 섹션 추출
-        csv_match = re.search(r"CSV:\s*\n(.*?)(?:\n\n(?:SUMMARY|ANALYSIS):|\Z)", raw, re.DOTALL)
+        # CSV 섹션 추출 — 가변 줄바꿈 허용, 대소문자 무관
+        csv_match = re.search(
+            r"CSV:?\s*\n(.*?)(?:\n+(?:SUMMARY|ANALYSIS):|\Z)",
+            raw, re.DOTALL | re.IGNORECASE,
+        )
         pinmap_csv = ""
         if csv_match:
             csv_block = csv_match.group(1).strip()
