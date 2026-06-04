@@ -29,46 +29,62 @@ git pull
 
 ## Step 0.5 — Ollama 멀티 모델 동시 상주 설정 (중요)
 
-Spark에서 다른 서비스가 `gemma4-fast` 같은 모델을 함께 쓰면, Ollama 기본 설정은
-모델을 **하나만** 메모리에 유지하려 해서 호출 때마다 서로 밀어냅니다(evict).
-이 경우 우리 Vision 모델(`gemma4:31b`)이 매번 콜드 로드(~20GB)되어 응답이
-수십 초~수 분까지 느려지고 read timeout이 납니다.
+이 Spark의 Ollama는 **여러 서비스가 공유**합니다 (예: `team-chat-ui`/open-webui가
+`gemma4-fast`를 사용). Ollama 기본값은 모델을 **하나만** 메모리에 유지하려 해서,
+우리 Vision 모델(`gemma4:31b`)과 다른 서비스의 모델이 호출 때마다 서로 밀어냅니다(evict).
+그러면 gemma4:31b가 매번 콜드 로드(~19GB)되어 응답이 수십 초~수 분까지 느려지고
+read timeout(현재 600s)이 납니다.
 
-`ollama ps`로 현재 상주 모델 확인:
+`ollama ps`로 진단:
 
 ```bash
 ollama ps
-# UNTIL이 "Stopping..."이거나 gemma4:31b가 안 보이면 evict 발생 중
+# 비어 있거나, gemma4:31b가 안 보이거나, UNTIL이 "Stopping..."이면 → 상주 안 됨(evict)
+ollama list   # gemma4:31b, gemma4-fast 가 설치돼 있는지 (없으면 ollama pull gemma4:31b)
 ```
 
-**해결 — 여러 모델을 동시에 메모리에 유지** (gemma4:31b ~20GB + gemma4-fast ~25GB ≪ 128GB):
+**이 환경은 systemd가 없습니다** (`Failed to connect to bus: Host is down`).
+Ollama는 systemd 서비스가 아니라 **워크스페이스 컨테이너(`ai-workspace-corp`) 안 또는
+호스트에서 `ollama serve` 프로세스**로 떠서 `172.18.0.1:11434`로 공유됩니다.
+따라서 `systemctl`이 아니라 **그 serve 프로세스의 환경변수**를 바꿔야 합니다.
 
-systemd로 Ollama를 띄우는 경우:
+### 1) Ollama가 실제로 어디서 도는지 확인
 
 ```bash
-sudo systemctl edit ollama
-# 열린 편집기에 아래 추가:
-#   [Service]
-#   Environment="OLLAMA_MAX_LOADED_MODELS=3"
-#   Environment="OLLAMA_KEEP_ALIVE=-1"
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
+# 워크스페이스 컨테이너 안에서 도는지
+sudo docker exec ai-workspace-corp ps aux | grep -i "ollama serve" | grep -v grep
+# 또는 호스트에서 11434를 누가 잡고 있는지
+sudo ss -tlnp | grep 11434 || sudo lsof -i:11434
 ```
 
-`ollama serve`를 수동으로 띄우는 경우:
+### 2) 멀티 상주로 재시작 (gemma4:31b 19GB + gemma4-fast 19GB ≪ 128GB)
+
+컨테이너(`ai-workspace-corp`) 안에서 도는 경우:
 
 ```bash
-export OLLAMA_MAX_LOADED_MODELS=3   # 동시 상주 모델 수
-export OLLAMA_KEEP_ALIVE=-1         # 모델 영구 상주 (idle 시에도 안 내림)
-ollama serve
+ai-in                              # = sudo docker exec -it ai-workspace-corp /bin/bash
+ps aux | grep ollama               # 현재 실행 방식/런처 확인
+pkill ollama; sleep 2
+OLLAMA_MAX_LOADED_MODELS=3 OLLAMA_KEEP_ALIVE=-1 nohup ollama serve > /tmp/ollama.log 2>&1 &
 ```
 
-적용 후 검증 한 번 돌리고 `ollama ps`를 다시 보면 `gemma4:31b`와 다른 모델이
-**둘 다 상주**(UNTIL=Forever)하며 서로 밀어내지 않습니다.
+호스트 프로세스로 도는 경우 — 위 `pkill`/`nohup ... ollama serve` 줄을 호스트에서 실행.
 
-> 참고: 앱 코드도 Vision/LLM 호출에 `keep_alive: -1`을 보내 모델을 고정하지만,
-> 데몬의 `OLLAMA_MAX_LOADED_MODELS`가 1이면 결국 다른 모델을 밀어내므로
-> **반드시 데몬 설정을 2 이상**으로 올려야 합니다.
+- `OLLAMA_MAX_LOADED_MODELS`: 동시에 메모리에 유지할 모델 수. 1보다 크면 됨(모델 2개라
+  2면 충분, 여유로 3). **이 값이 1이면 앱의 `keep_alive:-1`도 소용없이 서로 밀어냄.**
+- `OLLAMA_KEEP_ALIVE=-1`: idle이어도 모델을 안 내림.
+- **영구화**: 컨테이너/호스트의 ollama 자동 기동 스크립트(entrypoint·`~/.bashrc`·rc.local 등)에
+  두 export를 추가. 안 하면 컨테이너/호스트 재시작 때마다 재설정해야 함.
+
+> 주의: ollama 재시작은 같은 데몬을 쓰는 **open-webui(team-chat-ui)도 잠깐 영향**받음(모델 재로드).
+> 이 박스에는 대형 모델이 많으므로(mixtral 79GB, qwen3.5:122b 81GB 등), 다른 사용자가 큰 모델을
+> 동시에 올리면 용량 압박으로 evict가 다시 날 수 있음 — 그땐 `OLLAMA_MAX_LOADED_MODELS`를
+> 더 올리기보다 사용 패턴을 조율.
+
+### 3) 검증
+
+검증 한 번 돌린 뒤 `ollama ps`에서 `gemma4:31b`와 `gemma4-fast`가 **둘 다 상주(UNTIL=Forever)**
+하면 성공. 백엔드 로그의 `[TIMING] vision=` 가 warm 기준 ~60~90s로 안정되고 300s timeout이 사라짐.
 
 ---
 
@@ -219,7 +235,7 @@ streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 | 증상 | 원인 | 해결 |
 |---|---|---|
 | `Connection refused :11434` | Ollama 미실행 | `ollama serve` |
-| Vision 매번 느림/timeout, `ollama ps`에 다른 모델만 보임 | 모델 1개만 상주 → 호출마다 콜드 로드(evict) | Step 0.5 — `OLLAMA_MAX_LOADED_MODELS≥2` 설정 후 Ollama 재시작 |
+| Vision 매번 느림/timeout, `ollama ps`가 비었거나 다른 모델만 보임 | 공유 Ollama가 모델 1개만 상주 → 호출마다 콜드 로드(evict) | Step 0.5 — `OLLAMA_MAX_LOADED_MODELS≥2`로 `ollama serve` 재시작 (systemd 아님) |
 | `Connection refused :6333` | Qdrant 미실행 | `docker start qdrant` |
 | RAG 결과 없음 | embed_and_index.py 미실행 | Step 3 재실행 |
 | `gemma4:31b not found` | 모델 미로드 | `ollama pull gemma4:31b` |
