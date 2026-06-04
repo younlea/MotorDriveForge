@@ -592,6 +592,15 @@ with tab1:
             st.session_state._rv_stages = {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}
             st.session_state._rv_rag_warn = False
             st.session_state["_rv_partial_timing"] = {}
+            # 이전 검증 결과/화면 초기화 — 새 분석 시 옛 리포트·디버그·핀이 남지 않게
+            st.session_state.last_report = None
+            st.session_state.review_passed = False
+            st.session_state.validated_pins = {}
+            st.session_state.vision_analysis = ""
+            st.session_state.extracted_csv = ""
+            st.session_state._rv_final_partial = {}
+            st.session_state._rv_final_logs = []
+            st.session_state.chat_history = []
 
             try:
                 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
