@@ -27,6 +27,51 @@ git pull
 
 ---
 
+## Step 0.5 — Ollama 멀티 모델 동시 상주 설정 (중요)
+
+Spark에서 다른 서비스가 `gemma4-fast` 같은 모델을 함께 쓰면, Ollama 기본 설정은
+모델을 **하나만** 메모리에 유지하려 해서 호출 때마다 서로 밀어냅니다(evict).
+이 경우 우리 Vision 모델(`gemma4:31b`)이 매번 콜드 로드(~20GB)되어 응답이
+수십 초~수 분까지 느려지고 read timeout이 납니다.
+
+`ollama ps`로 현재 상주 모델 확인:
+
+```bash
+ollama ps
+# UNTIL이 "Stopping..."이거나 gemma4:31b가 안 보이면 evict 발생 중
+```
+
+**해결 — 여러 모델을 동시에 메모리에 유지** (gemma4:31b ~20GB + gemma4-fast ~25GB ≪ 128GB):
+
+systemd로 Ollama를 띄우는 경우:
+
+```bash
+sudo systemctl edit ollama
+# 열린 편집기에 아래 추가:
+#   [Service]
+#   Environment="OLLAMA_MAX_LOADED_MODELS=3"
+#   Environment="OLLAMA_KEEP_ALIVE=-1"
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+`ollama serve`를 수동으로 띄우는 경우:
+
+```bash
+export OLLAMA_MAX_LOADED_MODELS=3   # 동시 상주 모델 수
+export OLLAMA_KEEP_ALIVE=-1         # 모델 영구 상주 (idle 시에도 안 내림)
+ollama serve
+```
+
+적용 후 검증 한 번 돌리고 `ollama ps`를 다시 보면 `gemma4:31b`와 다른 모델이
+**둘 다 상주**(UNTIL=Forever)하며 서로 밀어내지 않습니다.
+
+> 참고: 앱 코드도 Vision/LLM 호출에 `keep_alive: -1`을 보내 모델을 고정하지만,
+> 데몬의 `OLLAMA_MAX_LOADED_MODELS`가 1이면 결국 다른 모델을 밀어내므로
+> **반드시 데몬 설정을 2 이상**으로 올려야 합니다.
+
+---
+
 ## Step 1 — Python 패키지 설치
 
 ```bash
@@ -174,6 +219,7 @@ streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 | 증상 | 원인 | 해결 |
 |---|---|---|
 | `Connection refused :11434` | Ollama 미실행 | `ollama serve` |
+| Vision 매번 느림/timeout, `ollama ps`에 다른 모델만 보임 | 모델 1개만 상주 → 호출마다 콜드 로드(evict) | Step 0.5 — `OLLAMA_MAX_LOADED_MODELS≥2` 설정 후 Ollama 재시작 |
 | `Connection refused :6333` | Qdrant 미실행 | `docker start qdrant` |
 | RAG 결과 없음 | embed_and_index.py 미실행 | Step 3 재실행 |
 | `gemma4:31b not found` | 모델 미로드 | `ollama pull gemma4:31b` |
