@@ -774,7 +774,13 @@ with tab1:
                     if fp.get("rag_query"):
                         st.markdown("**RAG 쿼리 (입력)**")
                         st.code(fp["rag_query"], language="text")
-                    if fp.get("rag_context_preview"):
+                    _chunks = fp.get("rag_chunks")
+                    if _chunks:
+                        st.markdown(f"**검색된 청크 {len(_chunks)}개 (LLM 컨텍스트로 전달됨)**")
+                        for _i, _ch in enumerate(_chunks, 1):
+                            st.markdown(f"청크 {_i}")
+                            st.code(_ch, language="text")
+                    elif fp.get("rag_context_preview"):  # 구버전 호환
                         st.markdown("**검색된 컨텍스트 (미리보기)**")
                         st.code(fp["rag_context_preview"], language="text")
 

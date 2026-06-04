@@ -866,7 +866,8 @@ class ReviewAgent:
         self._save_partial(
             rag_query=rag_query,
             rag_docs_count=len(rag_docs),
-            rag_context_preview=rag_context[:500],
+            # 각 청크를 개별 저장 (디버그 패널에서 5개 모두 확인용). LLM엔 rag_context 전체가 들어감.
+            rag_chunks=[d[:1500] for d in rag_docs[:5]],
         )
 
         # ── [C] LLM Persona Debate ─────────────────────────────────────────
