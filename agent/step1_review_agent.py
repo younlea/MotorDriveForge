@@ -329,14 +329,16 @@ class ReviewAgent:
         핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
         스트리밍으로 호출 — 이미지 인코딩이 오래 걸려도 첫 토큰만 read_timeout 안에 오면 OK.
         """
+        # 추론 ON: OpenWebUI(추론 켜짐, 단순 프롬프트)는 핀 읽기 정확도가 ~90%인데,
+        # think=False로 끄면 정확도가 크게 떨어짐. 회로도를 한 핀씩 꼼꼼히 읽는 데는 추론이 필요.
+        # content가 비면 _ollama_stream이 아니라 아래 루프에서 thinking 폴백 처리.
+        # num_predict 넉넉히(추론 + 전체 핀맵 + 페리페럴). num_ctx는 Modelfile(32K) 따름.
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": images_b64}],
             "stream": True,
-            "think": False,   # 추론 비활성화 — 모든 토큰을 thinking이 아닌 content(CSV)로
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드 방지
-            # num_ctx 미지정 — gemma4-fast Modelfile 기본 컨텍스트(32K)를 따라 webui와 runner 공유.
-            "options": {"temperature": 0.1, "num_predict": 2048},  # 핀맵 CSV는 핀 수만큼 길어질 수 있음
+            "options": {"temperature": 0.2, "num_predict": 8192},
         }
         content_parts: List[str] = []
         thinking_parts: List[str] = []
@@ -391,42 +393,34 @@ class ReviewAgent:
         """
         multi = len(images_b64) > 1
         multi_note = (
-            f"\nThere are {len(images_b64)} schematic sheets of the SAME design. "
-            "Combine pins from ALL sheets into ONE merged pinmap. "
-            "If the same pin appears on multiple sheets, list it once.\n"
+            f"회로도가 {len(images_b64)}장입니다. 같은 설계의 여러 시트이니 모든 시트의 핀을 "
+            "하나의 핀맵으로 합치고, 같은 핀이 여러 시트에 나오면 한 번만 적으세요.\n"
             if multi else ""
         )
+        # OpenWebUI에서 단순 프롬프트 + 추론으로 ~90% 읽는 것을 재현 — 읽기(특히 신호 이름)에 집중.
+        # 형식 과부하/영문 강제가 정확도를 떨어뜨리므로 한국어·단순·읽기중심으로.
         vision_prompt = (
-            "You are an expert at reading STM32 motor driver schematics and extracting pin assignments.\n"
-            f"Target chip: {chip_hint or 'STM32G4'}\n"
-            f"User requirements: {prompt}\n"
-            f"{multi_note}\n"
-            "Output EXACTLY in this format (no extra commentary):\n\n"
-            "CHIP: <chip name, e.g. STM32G474RET6>\n\n"
+            "당신은 STM32 회로도(스키매틱)를 정밀하게 읽는 전문가입니다.\n"
+            "첨부된 회로도에서 STM32 칩셋과 각 핀의 연결을 하나씩 꼼꼼히 읽어 정리하세요.\n"
+            f"타겟 칩 힌트: {chip_hint or 'STM32G4 계열'}\n"
+            f"{multi_note}"
+            "가장 중요: 각 핀 옆/배선에 적힌 신호 이름(net label, 예: VSENS_VM)을 글자 그대로 정확히 읽으세요.\n\n"
+            "아래 형식으로만 출력하세요 (잡담·설명 금지):\n\n"
+            "CHIP: <칩명, 예: STM32G431RBI6>\n\n"
             "CSV:\n"
             "chip,pin,function,label\n"
-            "<chip>,<pin>,<function>,<label>\n"
-            "... (all visible pins across all sheets)\n\n"
+            "<칩>,<핀 예 PA0>,<그 핀의 STM32 기능 HAL표기 예 ADC1_IN1 — 확실치 않으면 비움>,<회로도 신호이름 예 VSENS_VM>\n"
+            "... (보이는 모든 핀)\n\n"
             "PERIPHERALS:\n"
-            "<External parts and their STM32 connections — FACTS ONLY, no analysis/problems. "
-            "One per line, e.g.:\n"
-            "- Gate driver: <part or type> — PWM inputs from STM32 <pins>, fault/enable on <pins>\n"
-            "- Power stage: <MOSFET/IPM type>, phases U/V/W\n"
-            "- Current sense: <shunt/hall>, <count> ch -> STM32 <OPAMP/ADC pins>\n"
-            "- Protection: <OCP/OVP/UVLO/fuse/TVS> if visible\n"
-            "- Connector: <purpose and key signals>\n"
-            "- Power: <rails/regulators, e.g. 24V->5V->3V3>\n"
-            "Only list what is visible. If a category is absent, omit it.>\n\n"
+            "<외부 부품/연결을 보이는 대로만 한 줄씩 (게이트드라이버·전류감지·보호·커넥터·전원). 안 보이면 생략>\n\n"
             "SUMMARY:\n"
-            "<2-3 sentences: key peripherals used (e.g. TIM1 6-ch complementary PWM, OPAMP current sense, FDCAN). "
-            "No analysis or problem identification — that is done in a later stage.>\n\n"
-            "Rules:\n"
-            "- function must use STM32 HAL notation: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1, etc.\n"
-            "- Include only pins clearly visible in the image(s).\n"
-            "- CSV section: header + data rows only, no prose.\n"
-            "- STM32G4 fixed pins (do NOT misassign): HSE crystal OSC_IN=PF0 / OSC_OUT=PF1; "
-            "32kHz crystal OSC32_IN=PC14 / OSC32_OUT=PC15; SWD SWDIO=PA13 / SWCLK=PA14; "
-            "USB on PA11/PA12 (not oscillator)."
+            "<핵심 구성 1~2문장. 분석·문제지적은 하지 말 것>\n\n"
+            "원칙:\n"
+            "- label(신호이름)은 회로도에 적힌 그대로. 절대 지어내지 말 것.\n"
+            "- function(STM32 기능)은 확실할 때만 채우고 모르면 비워둘 것 (틀린 추측보다 빈 칸이 낫다).\n"
+            "- 회로도에 실제로 보이는 핀만. 안 보이면 만들어내지 말 것.\n"
+            "- STM32G4 고정핀(오인 금지): OSC_IN=PF0, OSC_OUT=PF1, OSC32_IN=PC14, OSC32_OUT=PC15, "
+            "SWDIO=PA13, SWCLK=PA14, USB=PA11/PA12(오실레이터 아님)."
         )
 
         logger.info("Vision extraction 시작 (model=%s, sheets=%d)", GEMMA4_VISION_MODEL, len(images_b64))
