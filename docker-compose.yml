@@ -42,12 +42,18 @@ services:
       - PIN_AF_DB_PATH=/app/agent/pin_af_db.json
       - IOC_OUTPUT_DIR=/tmp/ioc_outputs
       - CODE_OUTPUT_DIR=/tmp/code_outputs
+      # 오프라인 운영: bge-m3 임베딩 모델을 huggingface.co가 아닌 마운트된 로컬 캐시에서 로드
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/hf_cache
       - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
       - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ioc_outputs:/tmp/ioc_outputs
       - review_results:/app/review_results
       - ./agent:/app/agent:ro
+      # 호스트의 HF 캐시(오프라인 인제스천 시 받은 bge-m3) → 컨테이너 HF_HOME
+      - ${HF_CACHE_DIR:-/root/.cache/huggingface}:/hf_cache:ro
     depends_on:
       qdrant:
         condition: service_healthy

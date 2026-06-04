@@ -35,6 +35,8 @@ cd "$SCRIPT_DIR"
 FRONTEND_PORT="${FRONTEND_PORT:-8501}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 OLLAMA_URL="${OLLAMA_URL:-http://host.docker.internal:11434}"
+# 오프라인 운영: bge-m3 임베딩 모델이 캐시된 호스트 HF 디렉토리 (컨테이너에 마운트됨)
+HF_CACHE_DIR="${HF_CACHE_DIR:-$HOME/.cache/huggingface}"
 MODE="${1:-docker}"
 
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
@@ -148,7 +150,16 @@ cmd_docker() {
 OLLAMA_URL=${OLLAMA_URL}
 FRONTEND_PORT=${FRONTEND_PORT}
 BACKEND_PORT=${BACKEND_PORT}
+HF_CACHE_DIR=${HF_CACHE_DIR}
 EOF
+
+    # HF 캐시 존재 확인 — 없으면 RAG 임베딩이 0벡터 폴백으로 떨어짐
+    if [ ! -d "$HF_CACHE_DIR/hub" ]; then
+        warn "HF 캐시($HF_CACHE_DIR/hub)를 찾지 못했습니다. bge-m3 미캐시 시 RAG 검색 품질이 저하됩니다."
+        warn "오프라인 인제스천(scripts/embed_and_index.py)을 먼저 1회 실행해 모델을 캐시하세요."
+    else
+        ok "HF 캐시 확인: $HF_CACHE_DIR"
+    fi
 
     info "이미지 빌드 및 컨테이너 시작..."
     echo ""
@@ -212,6 +223,7 @@ cmd_dev() {
     info "Backend 시작 (포트 $BACKEND_PORT)..."
     pkill -f "uvicorn backend.main" 2>/dev/null || true; sleep 1
     OLLAMA_URL="$OLLAMA_URL" \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HOME="$HF_CACHE_DIR" \
     python3 -m uvicorn backend.main:app \
         --host 0.0.0.0 --port "$BACKEND_PORT" \
         > "$LOG_DIR/backend.log" 2>&1 &

@@ -27,6 +27,12 @@ import pandas as pd
 import requests
 from pydantic import BaseModel, Field
 
+# 오프라인 운영: HF가 huggingface.co로 나가지 않고 로컬 캐시만 쓰도록 강제.
+# (컨테이너 env로 명시 설정되면 그 값이 우선 — setdefault라 덮어쓰지 않음)
+# 반드시 sentence_transformers/huggingface_hub import 전에 설정해야 함.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 # sentence_transformers는 embed_and_index.py와 동일한 백엔드 — 벡터 호환 보장
 try:
     from sentence_transformers import SentenceTransformer as _ST
