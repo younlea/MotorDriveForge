@@ -135,6 +135,24 @@ def check_service(url: str, path: str = "", timeout: int = 3) -> bool:
         return False
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _cached_check_services() -> dict:
+    return {
+        "backend": check_service(BACKEND_URL, "/v1/health", timeout=2),
+        "ollama":  check_service(OLLAMA_URL,  "/api/tags",   timeout=2),
+        "qdrant":  check_service(QDRANT_URL,  "/collections", timeout=2),
+    }
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_status() -> dict:
+    try:
+        r = requests.get(f"{BACKEND_URL}/v1/status", timeout=4)
+        return r.json() if r.status_code == 200 else {}
+    except Exception:
+        return {}
+
+
 def status_icon(ok: bool) -> str:
     return "✅" if ok else "❌"
 
@@ -257,25 +275,22 @@ with st.sidebar:
     if st.button("새로고침", key="refresh_status"):
         st.rerun()
 
-    backend_ok = check_service(BACKEND_URL, "/v1/health")
-    ollama_ok = check_service(OLLAMA_URL, "/api/tags")
-    qdrant_ok = check_service(QDRANT_URL, "/collections")
+    _svc = _cached_check_services()
+    backend_ok = _svc["backend"]
+    ollama_ok  = _svc["ollama"]
+    qdrant_ok  = _svc["qdrant"]
 
     st.write(f"{status_icon(backend_ok)} **Backend** (`{BACKEND_URL}`)")
     st.write(f"{status_icon(ollama_ok)} **Ollama** (`:{11434}`)")
     st.write(f"{status_icon(qdrant_ok)} **Qdrant** (`:{6333}`)")
 
-    if backend_ok:
-        try:
-            r = requests.get(f"{BACKEND_URL}/v1/status", timeout=5)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get("ollama_models"):
-                    st.caption(f"모델: {', '.join(data['ollama_models'][:2])}")
-                if data.get("qdrant_collections"):
-                    st.caption(f"컬렉션: {', '.join(data['qdrant_collections'])}")
-        except Exception:
-            pass
+    # 검증 중에는 status 조회 생략 (backend 부하 방지)
+    if backend_ok and not st.session_state._rv_running:
+        _st = _cached_status()
+        if _st.get("ollama_models"):
+            st.caption(f"모델: {', '.join(_st['ollama_models'][:2])}")
+        if _st.get("qdrant_collections"):
+            st.caption(f"컬렉션: {', '.join(_st['qdrant_collections'])}")
 
     st.divider()
     st.caption("3-Step 파이프라인")
@@ -531,7 +546,7 @@ with tab1:
             with st.expander("서버 로그", expanded=False):
                 st.code("\n".join(_logs[-30:]), language=None)
 
-        time.sleep(2)
+        time.sleep(3)
         st.rerun()
 
     # ── 에러 표시 ────────────────────────────────────────────────────────
