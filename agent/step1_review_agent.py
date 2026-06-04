@@ -245,6 +245,7 @@ class ReviewAgent:
             "prompt": user,
             "system": system,
             "stream": False,
+            "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드 방지
             "options": {"temperature": 0.1, "num_predict": 2048},
         }
         try:
@@ -260,13 +261,18 @@ class ReviewAgent:
             return ""
 
     def _ollama_multimodal(self, prompt: str, image_b64: str, model: str) -> str:
-        """Ollama multimodal generate — 이미지 + 텍스트 → 응답 (Gemma 4 31B)."""
+        """Ollama multimodal generate — 이미지 + 텍스트 → 응답 (Gemma 4 31B).
+
+        핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
+        상세 설계 분석은 C단계 LLM이 수행하므로 여기선 CSV + 짧은 요약만.
+        """
         payload = {
             "model": model,
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 3072},
+            "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
+            "options": {"temperature": 0.1, "num_predict": 1024},
         }
         try:
             r = requests.post(
@@ -293,8 +299,8 @@ class ReviewAgent:
         vision_analysis: 이미지에서 추출한 초기 분석 텍스트 (한국어)
         """
         chip_hint_text = f"\n타겟 칩 힌트: {chip_hint}" if chip_hint else ""
-        vision_prompt = f"""당신은 STM32G4 모터 드라이버 회로 전문가입니다.
-첨부된 회로도 이미지를 분석하여 다음 정보를 추출하세요.{chip_hint_text}
+        vision_prompt = f"""당신은 STM32G4 모터 드라이버 회로도에서 핀맵을 추출하는 OCR 전문가입니다.
+첨부된 회로도 이미지에서 칩과 핀 연결 정보만 빠르게 추출하세요.{chip_hint_text}
 사용자 요구사항: {prompt}
 
 아래 형식으로 정확히 출력하세요:
@@ -306,10 +312,11 @@ chip,pin,function,label
 <chip>,<pin>,<function>,<label>
 ... (모든 핀 나열)
 
-ANALYSIS:
-<회로도의 설계 의도, 주요 기능, 잠재적 문제점에 대한 한국어 분석>
+SUMMARY:
+<2~3문장으로 핵심 구성만 간단히. 예: "FOC 제어용 TIM1 상보 PWM 6채널, OPAMP 전류 감지 3채널, FDCAN 통신 사용." 상세 분석/문제점 지적은 하지 말 것 — 이후 단계에서 수행됨>
 
 주의:
+- 핀맵 추출이 핵심 작업. SUMMARY는 짧게.
 - function은 STM32 HAL 형식으로 (예: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1)
 - 이미지에서 명확히 보이는 핀만 포함, 불확실한 핀은 제외
 - CSV 섹션은 헤더 포함 순수 CSV만, 설명 추가 금지"""
@@ -326,7 +333,7 @@ ANALYSIS:
         extracted_chip = chip_match.group(1).upper() if chip_match else chip_hint
 
         # CSV 섹션 추출
-        csv_match = re.search(r"CSV:\s*\n(.*?)(?:\n\nANALYSIS:|\Z)", raw, re.DOTALL)
+        csv_match = re.search(r"CSV:\s*\n(.*?)(?:\n\n(?:SUMMARY|ANALYSIS):|\Z)", raw, re.DOTALL)
         pinmap_csv = ""
         if csv_match:
             csv_block = csv_match.group(1).strip()
@@ -345,9 +352,9 @@ ANALYSIS:
             else:
                 pinmap_csv = csv_block
 
-        # ANALYSIS 섹션 추출
-        analysis_match = re.search(r"ANALYSIS:\s*\n(.*)", raw, re.DOTALL)
-        vision_analysis = analysis_match.group(1).strip() if analysis_match else raw[:500]
+        # SUMMARY(또는 구버전 ANALYSIS) 섹션 추출
+        analysis_match = re.search(r"(?:SUMMARY|ANALYSIS):\s*\n(.*)", raw, re.DOTALL)
+        vision_analysis = analysis_match.group(1).strip() if analysis_match else raw[:300]
 
         logger.info(
             "Vision extraction 완료 — chip=%s, csv_lines=%d",
