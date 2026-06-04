@@ -27,66 +27,55 @@ git pull
 
 ---
 
-## Step 0.5 — Ollama 멀티 모델 동시 상주 설정 (중요)
+## Step 0.5 — Ollama 모델 설정 (gemma4-fast 공유 방식)
 
-이 Spark의 Ollama는 **여러 서비스가 공유**합니다 (예: `team-chat-ui`/open-webui가
-`gemma4-fast`를 사용). Ollama 기본값은 모델을 **하나만** 메모리에 유지하려 해서,
-우리 Vision 모델(`gemma4:31b`)과 다른 서비스의 모델이 호출 때마다 서로 밀어냅니다(evict).
-그러면 gemma4:31b가 매번 콜드 로드(~19GB)되어 응답이 수십 초~수 분까지 느려지고
-read timeout(현재 600s)이 납니다.
+이 Spark의 Ollama는 **여러 서비스가 공유**합니다 (`team-chat-ui`/open-webui가 `gemma4-fast` 사용).
+단일 iGPU(GB10)에서 Ollama 0.23.1은 모델을 사실상 1개만 상주시켜서, 서로 다른 모델을 쓰면
+호출 때마다 evict→콜드로드가 반복됩니다.
 
-`ollama ps`로 진단:
+**핵심 사실**: `gemma4-fast`는 `gemma4:31b`와 **완전히 같은 모델**입니다 (`/workspace/Modelfile`
+= `FROM gemma4:31b` + `num_ctx`만 지정). 품질 동일. 그래서 **MotorDriveForge도 webui와 똑같이
+`gemma4-fast`를 쓰면 같은 runner 하나를 공유** → evict/콜드로드/충돌이 원천 차단됩니다.
+(앱 코드는 이미 `gemma4-fast`를 쓰도록 설정됨, 요청에 num_ctx를 싣지 않아 Modelfile 기본값을 공유)
 
-```bash
-ollama ps
-# 비어 있거나, gemma4:31b가 안 보이거나, UNTIL이 "Stopping..."이면 → 상주 안 됨(evict)
-ollama list   # gemma4:31b, gemma4-fast 가 설치돼 있는지 (없으면 ollama pull gemma4:31b)
-```
+### 1) gemma4-fast 컨텍스트를 32K로 (Vision 이미지 ~5천 토큰 + RAG 여유 확보)
 
-**이 환경은 systemd가 없습니다** (`Failed to connect to bus: Host is down`).
-Ollama는 systemd 서비스가 아니라 **워크스페이스 컨테이너(`ai-workspace-corp`) 안 또는
-호스트에서 `ollama serve` 프로세스**로 떠서 `172.18.0.1:11434`로 공유됩니다.
-따라서 `systemctl`이 아니라 **그 serve 프로세스의 환경변수**를 바꿔야 합니다.
-
-### 1) Ollama가 실제로 어디서 도는지 확인
+기본 8K는 Vision(이미지만 ~5,376 토큰) + RAG에 빠듯합니다. `/workspace/Modelfile`을 수정:
 
 ```bash
-# 워크스페이스 컨테이너 안에서 도는지
-sudo docker exec ai-workspace-corp ps aux | grep -i "ollama serve" | grep -v grep
-# 또는 호스트에서 11434를 누가 잡고 있는지
-sudo ss -tlnp | grep 11434 || sudo lsof -i:11434
+# /workspace/Modelfile 내용을 아래로
+#   FROM gemma4:31b
+#   PARAMETER num_ctx 32768
+ollama create gemma4-fast:latest -f /workspace/Modelfile   # 재등록 (가중치는 캐시 재사용, 빠름)
+ollama stop gemma4-fast:latest 2>/dev/null                  # 기존 8K 인스턴스 내려서 32K로 재로드되게
 ```
 
-### 2) 멀티 상주로 재시작 (gemma4:31b 19GB + gemma4-fast 19GB ≪ 128GB)
+webui 사용자도 8K→32K로 컨텍스트가 늘 뿐(메모리 ~25→27GB) 손해 없습니다.
 
-컨테이너(`ai-workspace-corp`) 안에서 도는 경우:
+### 2) Ollama serve 환경변수 (`/workspace/ollama_launch.sh`)
+
+이 호스트는 systemd가 없고, Ollama는 `/workspace/ollama_launch.sh`로 수동 기동됩니다.
+스크립트에 아래 export가 있어야 합니다 (`/workspace`는 볼륨이라 영구 유지):
 
 ```bash
-ai-in                              # = sudo docker exec -it ai-workspace-corp /bin/bash
-ps aux | grep ollama               # 현재 실행 방식/런처 확인
-pkill ollama; sleep 2
-OLLAMA_HOST=0.0.0.0 OLLAMA_MAX_LOADED_MODELS=3 OLLAMA_KEEP_ALIVE=-1 nohup ollama serve > /tmp/ollama.log 2>&1 &
+#!/bin/bash
+export OLLAMA_HOST=0.0.0.0          # 없으면 127.0.0.1 바인딩 → 컨테이너가 접속 못 함(상태창 "X")
+export OLLAMA_KEEP_ALIVE=-1         # idle에도 모델 유지 (콜드로드 방지)
+export OLLAMA_MAX_LOADED_MODELS=3   # (공유 방식에선 1개만 써도 무방하나, 둬도 무해)
+nohup ollama serve > /workspace/ollama.log 2>&1 &
 ```
 
-호스트 프로세스로 도는 경우 — 위 `pkill`/`nohup ... ollama serve` 줄을 호스트에서 실행.
-
-- `OLLAMA_HOST=0.0.0.0`: **반드시 유지.** 이게 없으면 Ollama가 127.0.0.1에만 바인딩되어
-  Docker 컨테이너(backend/frontend)가 접속 못 함 → 상태창 Ollama "X". 재시작 시 빠뜨리지 말 것.
-- `OLLAMA_MAX_LOADED_MODELS`: 동시에 메모리에 유지할 모델 수. 1보다 크면 됨(모델 2개라
-  2면 충분, 여유로 3). **이 값이 1이면 앱의 `keep_alive:-1`도 소용없이 서로 밀어냄.**
-- `OLLAMA_KEEP_ALIVE=-1`: idle이어도 모델을 안 내림.
-- **영구화**: 컨테이너/호스트의 ollama 자동 기동 스크립트(entrypoint·`~/.bashrc`·rc.local 등)에
-  두 export를 추가. 안 하면 컨테이너/호스트 재시작 때마다 재설정해야 함.
-
-> 주의: ollama 재시작은 같은 데몬을 쓰는 **open-webui(team-chat-ui)도 잠깐 영향**받음(모델 재로드).
-> 이 박스에는 대형 모델이 많으므로(mixtral 79GB, qwen3.5:122b 81GB 등), 다른 사용자가 큰 모델을
-> 동시에 올리면 용량 압박으로 evict가 다시 날 수 있음 — 그땐 `OLLAMA_MAX_LOADED_MODELS`를
-> 더 올리기보다 사용 패턴을 조율.
+적용: `pkill ollama; sleep 3; /workspace/ollama_launch.sh`
+확인: `cat /proc/$(pgrep -x ollama | head -1)/environ | tr '\0' '\n' | grep -i ollama`
 
 ### 3) 검증
 
-검증 한 번 돌린 뒤 `ollama ps`에서 `gemma4:31b`와 `gemma4-fast`가 **둘 다 상주(UNTIL=Forever)**
-하면 성공. 백엔드 로그의 `[TIMING] vision=` 가 warm 기준 ~60~90s로 안정되고 300s timeout이 사라짐.
+```bash
+# MotorDriveForge 리뷰 1회 실행 후
+ollama ps
+# → gemma4-fast:latest 하나가 CONTEXT 32768 로 떠 있고, webui도 같은 걸 공유.
+#   백엔드 로그 [TIMING] vision= 가 콜드로드 없이 안정적(warm ~60~90s).
+```
 
 ---
 
@@ -237,9 +226,9 @@ streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 | 증상 | 원인 | 해결 |
 |---|---|---|
 | `Connection refused :11434` | Ollama 미실행 | `ollama serve` |
-| Vision 매번 느림/timeout, `ollama ps`가 비었거나 다른 모델만 보임 | 공유 Ollama가 모델 1개만 상주 → 호출마다 콜드 로드(evict) | Step 0.5 — `OLLAMA_MAX_LOADED_MODELS≥2`로 `ollama serve` 재시작 (systemd 아님) |
+| Vision 매번 느림/timeout, 모델이 자꾸 콜드 로드 | 앱과 webui가 서로 다른 모델/컨텍스트를 써서 단일 iGPU에서 evict 반복 | Step 0.5 — 앱이 webui와 같은 `gemma4-fast`(32K) 공유하도록 (이미 코드 반영, Modelfile 32K + 재시작만) |
 | `start.sh restart` 후 상태창 Ollama "X" | compose가 `host.docker.internal`(host-gateway)로 호스트 연결 — Ollama가 127.0.0.1에만 바인딩됐거나 게이트웨이 변동 | `OLLAMA_HOST=0.0.0.0`로 `ollama serve` 재시작. compose는 이미 host-gateway 사용(하드코딩 IP 제거됨) |
 | `Connection refused :6333` | Qdrant 미실행 | `docker start qdrant` |
 | RAG 결과 없음 | embed_and_index.py 미실행 | Step 3 재실행 |
-| `gemma4:31b not found` | 모델 미로드 | `ollama pull gemma4:31b` |
+| `gemma4-fast not found` | 모델 미등록 | `ollama create gemma4-fast:latest -f /workspace/Modelfile` (베이스 `gemma4:31b` 필요 시 `ollama pull gemma4:31b`) |
 | pin_af_db 경고 | XML 없이 폴백 사용 중 | X-CUBE-MCSDK 설치 후 Step 4 재실행 |
