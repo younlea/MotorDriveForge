@@ -276,12 +276,12 @@ class ReviewAgent:
             "model": model,
             "prompt": user,
             "system": system,
-            "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드 방지
+            "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드(~20GB)로 인한 지연/변동 방지
             "options": {"temperature": 0.1, "num_predict": 2048},
         }
         try:
-            # read_timeout: 첫 토큰까지(모델 로드 포함) 최대 대기. 이후 토큰 간격은 짧음.
-            return self._ollama_stream(payload, read_timeout=300)
+            # read_timeout: 첫 토큰까지(콜드 로드 포함) 최대 대기. 이후 토큰 간격은 짧음.
+            return self._ollama_stream(payload, read_timeout=600)
         except Exception as e:
             logger.error("Ollama generate error: %s", e)
             return ""
@@ -299,7 +299,7 @@ class ReviewAgent:
             "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
             "stream": True,
             "think": False,   # 추론 비활성화 — 모든 토큰을 thinking이 아닌 content(CSV)로
-            "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
+            "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드(~20GB)로 인한 지연/변동 방지
             "options": {"temperature": 0.1, "num_predict": 2048},  # 핀맵 CSV는 핀 수만큼 길어질 수 있음
         }
         content_parts: List[str] = []
@@ -310,7 +310,7 @@ class ReviewAgent:
                 f"{self.ollama_url}/api/chat",
                 json=payload,
                 stream=True,
-                timeout=(10, 300),  # (connect, 첫 토큰까지 = 모델 로드 + 이미지 인코딩)
+                timeout=(10, 600),  # (connect, 첫 토큰까지 = 콜드 로드 + 이미지 인코딩)
             ) as r:
                 r.raise_for_status()
                 for line in r.iter_lines():
