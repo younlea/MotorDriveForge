@@ -35,8 +35,8 @@ _paste_comp = components.declare_component(
 # ---------------------------------------------------------------------------
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-OLLAMA_URL = "http://localhost:11434"
-QDRANT_URL = "http://localhost:6333"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 CHIPS = [
     "STM32G431RBT6",

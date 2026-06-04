@@ -70,6 +70,8 @@ services:
       - "${FRONTEND_PORT:-8501}:8501"
     environment:
       - BACKEND_URL=http://backend:8000
+      - OLLAMA_URL=http://172.18.0.1:11434
+      - QDRANT_URL=http://qdrant:6333
       - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
       - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
     volumes:
