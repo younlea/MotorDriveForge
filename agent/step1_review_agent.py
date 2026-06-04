@@ -524,11 +524,17 @@ class ReviewAgent:
         # --- SPI EEPROM
         req.spi_eeprom = bool(re.search(r"spi.*?eeprom|eeprom.*?spi", prompt, re.IGNORECASE))
 
-        # LLM 보완 파싱 시도
-        try:
-            req = self._llm_enhance_requirements(req)
-        except Exception as e:
-            logger.warning("LLM requirements enhance failed: %s", e)
+        # LLM 보완 파싱 — 기본 OFF. 정규식이 이미 모든 필드를 파싱하므로 보통 불필요하고,
+        # 여기서 LLM을 호출하면 Vision~rule_engine 사이를 수십 초~분 막아버림(stage 로그도 없어 '쉬는 것'처럼 보임).
+        # 비정형 프롬프트라 정규식이 약할 때만 LLM_ENHANCE_REQUIREMENTS=1로 켜기.
+        if os.getenv("LLM_ENHANCE_REQUIREMENTS", "0") == "1":
+            logger.info("[STAGE] requirements_llm:start")
+            _t0 = self._stage_start("requirements_llm")
+            try:
+                req = self._llm_enhance_requirements(req)
+            except Exception as e:
+                logger.warning("LLM requirements enhance failed: %s", e)
+            self._stage_done("requirements_llm", _t0)
 
         return req
 
@@ -542,7 +548,8 @@ class ReviewAgent:
             "Do not add any explanation."
         )
         user = f"Prompt:\n{req.raw_prompt}\n\nCurrent parsed (may be incomplete):\n{req.model_dump_json()}"
-        raw = self._ollama_generate(system, user, model)
+        # 작은 JSON 출력 — think=False(기본), num_predict 작게 잡아 빠르게.
+        raw = self._ollama_generate(system, user, model, num_predict=512)
 
         # JSON 블록 추출
         m = re.search(r"\{.*\}", raw, re.DOTALL)
