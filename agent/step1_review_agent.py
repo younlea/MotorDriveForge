@@ -802,6 +802,11 @@ class ReviewAgent:
         requirements = self.parse_prompt(request.prompt)
         if not requirements.chip:
             requirements.chip = request.chip
+        # 디버그: 프롬프트에서 인식된 요구사항 + Rule Engine 입력 핀맵 노출
+        self._save_partial(
+            requirements=requirements.model_dump(),
+            pinmap_rows=pinmap_df.fillna("").to_dict(orient="records"),
+        )
 
         if self._is_cancelled():
             raise InterruptedError("cancelled")
@@ -850,7 +855,11 @@ class ReviewAgent:
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
         self._stage_done("rag", _t0)
         logger.info("[STAGE] rag:done docs=%d", len(rag_docs))
-        self._save_partial(rag_docs_count=len(rag_docs), rag_context_preview=rag_context[:500])
+        self._save_partial(
+            rag_query=rag_query,
+            rag_docs_count=len(rag_docs),
+            rag_context_preview=rag_context[:500],
+        )
 
         # ── [C] LLM Persona Debate ─────────────────────────────────────────
         if self._is_cancelled():

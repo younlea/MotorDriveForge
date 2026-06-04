@@ -122,6 +122,10 @@ for key, default in [
     ("_rv_stages", {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}),
     ("_rv_rag_warn", False),
     ("_rv_partial_timing", {}),
+    # 디버그: 결과 표시 후에도 남길 중간 데이터/로그 스냅샷
+    ("_rv_final_partial", {}),
+    ("_rv_final_logs", []),
+    ("_dev_debug", True),  # 개발 중 디버그 패널 표시 (완료 후 끄기)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -349,6 +353,11 @@ with st.sidebar:
     st.write("⚪ Step 3: 알고리즘 통합")
 
     st.divider()
+    st.session_state._dev_debug = st.checkbox(
+        "🛠 개발자 디버그 패널",
+        value=st.session_state._dev_debug,
+        help="결과 표시 후에도 인식된 입력값·Rule Engine·RAG·서버 로그를 접이식으로 노출합니다. 운영 시 끄세요.",
+    )
     st.caption("MotorDriveForge v2.0")
 
 
@@ -644,6 +653,18 @@ with tab1:
     _rv_resp = st.session_state._rv_result
     if _rv_resp is not None:
         st.session_state._rv_result = None
+        # 결과 도착 직후 중간 데이터/로그를 스냅샷 — 결과 표시 후에도 디버그 패널에서 유지
+        try:
+            _fp = requests.get(f"{BACKEND_URL}/v1/review/partial", timeout=3).json()
+            st.session_state._rv_final_partial = _fp or {}
+        except Exception:
+            pass
+        try:
+            _fl = requests.get(f"{BACKEND_URL}/v1/logs?n=200", timeout=3)
+            if _fl.status_code == 200:
+                st.session_state._rv_final_logs = _fl.json().get("logs", [])
+        except Exception:
+            pass
         r = _rv_resp
         if r.status_code == 200:
             report = r.json()
@@ -716,6 +737,54 @@ with tab1:
                 </script>""",
                 height=0,
             )
+
+        # ── 🛠 개발자 디버그 패널 (결과 표시 후에도 유지, 접이식) ──────────────
+        fp = st.session_state._rv_final_partial
+        if st.session_state._dev_debug and fp:
+            st.divider()
+            st.markdown("### 🛠 개발자 디버그 정보")
+            st.caption("결과 표시 후에도 유지되는 중간 단계 입출력. 운영 시 사이드바에서 끄세요.")
+
+            if fp.get("requirements"):
+                with st.expander("① 인식된 요구사항 (프롬프트 파싱 결과)", expanded=False):
+                    st.json(fp["requirements"])
+
+            if fp.get("pinmap_rows"):
+                with st.expander(f"② Rule Engine 입력 핀맵 ({len(fp['pinmap_rows'])}핀)", expanded=False):
+                    try:
+                        st.dataframe(pd.DataFrame(fp["pinmap_rows"]), use_container_width=True)
+                    except Exception:
+                        st.json(fp["pinmap_rows"])
+
+            if fp.get("extracted_csv"):
+                with st.expander("②′ Vision 추출 원본 CSV", expanded=False):
+                    st.code(fp["extracted_csv"], language="text")
+
+            if "rule_errors" in fp or "rule_warnings" in fp:
+                _errs = fp.get("rule_errors", [])
+                _warns = fp.get("rule_warnings", [])
+                with st.expander(f"③ Rule Engine 결과 — 오류 {len(_errs)} / 경고 {len(_warns)}", expanded=False):
+                    for e in _errs:
+                        st.error(e)
+                    for w in _warns:
+                        st.warning(w)
+
+            if fp.get("rag_query") or "rag_docs_count" in fp:
+                with st.expander(f"④ RAG — 검색 청크 {fp.get('rag_docs_count', 0)}개", expanded=False):
+                    if fp.get("rag_query"):
+                        st.markdown("**RAG 쿼리 (입력)**")
+                        st.code(fp["rag_query"], language="text")
+                    if fp.get("rag_context_preview"):
+                        st.markdown("**검색된 컨텍스트 (미리보기)**")
+                        st.code(fp["rag_context_preview"], language="text")
+
+            if fp.get("timing"):
+                with st.expander("⑤ 단계별 소요 시간", expanded=False):
+                    st.json(fp["timing"])
+
+            if st.session_state._rv_final_logs:
+                with st.expander("⑥ 서버 로그 (스냅샷)", expanded=False):
+                    st.code("\n".join(st.session_state._rv_final_logs), language=None)
 
     # ── 멀티턴 채팅 ──────────────────────────────────────────────────────────
     if st.session_state.last_report:
