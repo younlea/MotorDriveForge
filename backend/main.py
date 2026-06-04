@@ -68,7 +68,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 인메모리 로그 버퍼 (최근 200줄)
-_log_buffer: deque[str] = deque(maxlen=200)
+_log_buffer: deque[str] = deque(maxlen=500)
 
 class _BufHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:

@@ -118,6 +118,9 @@ for key, default in [
     ("_rv_error", None),
     ("_rv_start", None),
     ("_rv_cancel", False),
+    # 파이프라인 스테이지 (한번 올라간 상태는 내려가지 않음)
+    ("_rv_stages", {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}),
+    ("_rv_rag_warn", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -186,27 +189,57 @@ def _circular_progress_html(pct: int, elapsed: float, remaining: float) -> str:
 </div>"""
 
 
-def _pipeline_status_html(logs: list[str]) -> str:
-    log_text = "\n".join(logs)
+_STATE_RANK = {"wait": 0, "active": 1, "done": 2}
 
-    def _stage(key: str):
-        has_start = f"[STAGE] {key}:start" in log_text
-        has_done  = f"[STAGE] {key}:done"  in log_text
-        if has_done:   return "done"
-        if has_start:  return "active"
-        return "wait"
 
-    vision_state  = "done"  if "Vision extraction 완료" in log_text else (
-                    "active" if "Vision extraction 시작"  in log_text else "wait")
-    pinmap_state  = "done"  if ("Vision CSV 사용" in log_text or "직접 입력 CSV" in log_text) else (
-                    "active" if vision_state == "done" else "wait")
-    rule_state    = _stage("rule_engine")
-    rag_state     = _stage("rag")
-    llm_state     = _stage("llm")
+def _update_stages_from_logs(logs: list[str]) -> None:
+    """새 로그로 session_state의 스테이지를 업그레이드만 함 (다운그레이드 없음)."""
+    text = "\n".join(logs)
+    st_ = st.session_state._rv_stages
 
-    rag_warn = "embed failed" in log_text or "RAG 없음" in log_text
+    def _upgrade(key: str, new_state: str):
+        if _STATE_RANK[new_state] > _STATE_RANK[st_[key]]:
+            st_[key] = new_state
 
-    def _box(label: str, state: str, warn: bool = False) -> str:
+    # Vision
+    if "Vision extraction 완료" in text:
+        _upgrade("vision", "done")
+    elif "Vision extraction 시작" in text:
+        _upgrade("vision", "active")
+
+    # 핀맵
+    if "Vision CSV 사용" in text or "직접 입력 CSV" in text:
+        _upgrade("pinmap", "done")
+    elif st_["vision"] in ("active", "done"):
+        _upgrade("pinmap", "active")
+
+    # Rule Engine
+    if "[STAGE] rule_engine:done" in text:
+        _upgrade("rule_engine", "done")
+    elif "[STAGE] rule_engine:start" in text:
+        _upgrade("rule_engine", "active")
+
+    # RAG
+    if "[STAGE] rag:done" in text:
+        _upgrade("rag", "done")
+    elif "[STAGE] rag:start" in text:
+        _upgrade("rag", "active")
+    if "embed failed" in text or "(RAG 없음)" in text:
+        st.session_state._rv_rag_warn = True
+
+    # LLM
+    if "[STAGE] llm:done" in text:
+        _upgrade("llm", "done")
+    elif "[STAGE] llm:start" in text:
+        _upgrade("llm", "active")
+
+
+def _pipeline_status_html() -> str:
+    st_ = st.session_state._rv_stages
+    rag_warn = st.session_state._rv_rag_warn
+
+    def _box(label: str, key: str, warn: bool = False) -> str:
+        state = st_[key]
         colors = {
             "done":   ("#e8f5e9", "#2e7d32", "#43a047"),
             "active": ("#fff8e1", "#f57f17", "#ffa726"),
@@ -227,19 +260,17 @@ def _pipeline_status_html(logs: list[str]) -> str:
         )
 
     arrow = '<div style="font-size:22px;color:#bdbdbd;align-self:center">→</div>'
-
     boxes = [
-        _box("이미지 분석",  vision_state),
+        _box("이미지 분석",  "vision"),
         arrow,
-        _box("핀맵 추론",   pinmap_state),
+        _box("핀맵 추론",   "pinmap"),
         arrow,
-        _box("Rule Engine", rule_state),
+        _box("Rule Engine", "rule_engine"),
         arrow,
-        _box("RAG 검색",    rag_state, warn=rag_warn),
+        _box("RAG 검색",    "rag", warn=rag_warn),
         arrow,
-        _box("LLM 리뷰",    llm_state),
+        _box("LLM 리뷰",    "llm"),
     ]
-
     inner = "\n".join(boxes)
     return (
         f'<div style="display:flex;align-items:stretch;gap:8px;'
@@ -512,6 +543,8 @@ with tab1:
             st.session_state._rv_error = None
             st.session_state._rv_cancel = False
             st.session_state._rv_start = time.time()
+            st.session_state._rv_stages = {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}
+            st.session_state._rv_rag_warn = False
 
             try:
                 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
@@ -538,9 +571,11 @@ with tab1:
         except Exception:
             pass
 
-        # 파이프라인 단계 시각화
+        # 파이프라인 단계 시각화 (로그로 스테이지 업데이트 후 렌더)
+        if _logs:
+            _update_stages_from_logs(_logs)
         st.markdown("**파이프라인 진행 상태**")
-        st.markdown(_pipeline_status_html(_logs), unsafe_allow_html=True)
+        st.markdown(_pipeline_status_html(), unsafe_allow_html=True)
 
         if _logs:
             with st.expander("서버 로그", expanded=False):
