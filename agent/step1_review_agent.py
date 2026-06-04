@@ -172,6 +172,16 @@ OPAMP_MAX: Dict[str, int] = {
 }
 DMA_CH_MAX = 16
 
+# STM32G4 다이 고정 특수기능 핀 (패키지 무관). 회로도/Vision 오인식 검출용 — 결정론 검증.
+# 예) OSC_IN은 PF0 고정이라 PA11 같은 곳에 있을 수 없음.
+FIXED_FUNCTION_PINS: Dict[str, str] = {
+    "OSC_IN": "PF0", "OSC_OUT": "PF1",              # HSE 메인 크리스탈
+    "RCC_OSC_IN": "PF0", "RCC_OSC_OUT": "PF1",
+    "OSC32_IN": "PC14", "OSC32_OUT": "PC15",        # LSE 32.768kHz
+    "RCC_OSC32_IN": "PC14", "RCC_OSC32_OUT": "PC15",
+    "SWDIO": "PA13", "SWCLK": "PA14",               # SWD 디버그
+}
+
 # gemma4-fast = gemma4:31b 가중치 + Modelfile의 num_ctx(=웹UI와 공유하는 컨텍스트).
 # webui와 같은 모델을 써서 단일 runner를 공유 → evict/콜드로드 원천 차단. 품질은 31b와 동일.
 GEMMA4_VISION_MODEL = "gemma4-fast:latest"
@@ -394,7 +404,10 @@ class ReviewAgent:
             "Rules:\n"
             "- function must use STM32 HAL notation: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1, etc.\n"
             "- Include only pins clearly visible in the image(s).\n"
-            "- CSV section: header + data rows only, no prose."
+            "- CSV section: header + data rows only, no prose.\n"
+            "- STM32G4 fixed pins (do NOT misassign): HSE crystal OSC_IN=PF0 / OSC_OUT=PF1; "
+            "32kHz crystal OSC32_IN=PC14 / OSC32_OUT=PC15; SWD SWDIO=PA13 / SWCLK=PA14; "
+            "USB on PA11/PA12 (not oscillator)."
         )
 
         logger.info("Vision extraction 시작 (model=%s, sheets=%d)", GEMMA4_VISION_MODEL, len(images_b64))
@@ -671,6 +684,18 @@ class ReviewAgent:
             spi_funcs = [f for f in functions if "SPI" in f]
             if not spi_funcs:
                 warnings.append("SPI EEPROM 요청되었으나 핀맵에 SPI 핀이 없습니다.")
+
+        # 10. 고정 특수기능 핀 위치 검증 (OSC/SWD는 다이 고정 — 회로도·Vision 오인식 검출)
+        if "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
+            for _, row in pinmap_df.iterrows():
+                pin = str(row["pin"]).upper().strip()
+                func = str(row["function"]).upper().strip()
+                expected = FIXED_FUNCTION_PINS.get(func)
+                if expected and pin != expected:
+                    errors.append(
+                        f"고정 핀 불일치: {func}는 STM32G4에서 {expected}에 고정인데 {pin}에 할당됨. "
+                        f"회로도 재확인 필요(특히 Vision 추출 오인식 — 예: PA11/PA13은 OSC 핀이 아님)."
+                    )
 
         return errors, warnings
 
