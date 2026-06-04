@@ -1,6 +1,6 @@
 """
 Step 1 Review Agent — STM32G4 핀 검증 + 요구사항 파싱
-입력: ReviewRequest (chip, schematic_image_b64 OR pinmap_csv, prompt)
+입력: ReviewRequest (chip, schematic_images_b64[] OR pinmap_csv, prompt)
 출력: ReviewReport (errors, warnings, suggestions, validated_pins, vision_analysis)
 
 새 흐름:
@@ -59,9 +59,9 @@ class ReviewRequest(BaseModel):
         description="CSV 문자열 (chip,pin,function,label). 이미지 제공 시 자동 생성.",
     )
     prompt: str = Field(..., description="자연어 요구사항 프롬프트")
-    schematic_image_b64: Optional[str] = Field(
-        None,
-        description="회로도 이미지 base64 인코딩 (JPEG/PNG). 제공 시 Vision 분석 수행.",
+    schematic_images_b64: List[str] = Field(
+        default_factory=list,
+        description="회로도 이미지 base64 목록 (여러 장 = 한 설계의 멀티 시트). 제공 시 Vision 분석 수행.",
     )
     mode: str = Field(
         default="full",
@@ -302,17 +302,18 @@ class ReviewAgent:
             logger.error("Ollama generate error: %s", e)
             return ""
 
-    def _ollama_multimodal(self, prompt: str, image_b64: str, model: str) -> str:
-        """Ollama multimodal — 이미지 + 텍스트 → 응답 (Gemma 4 31B).
+    def _ollama_multimodal(self, prompt: str, images_b64: List[str], model: str) -> str:
+        """Ollama multimodal — 이미지(1장 이상) + 텍스트 → 응답 (Gemma 4 31B).
 
         /api/chat 사용 (OpenWebUI와 동일 경로). /api/generate는 Gemma 4 비전에서
         이미지를 평가만 하고 생성 토큰을 0개 내는 경우가 있어 빈 응답이 나옴.
+        여러 장은 한 메시지의 images 배열로 전달 → 모델이 한 설계로 종합.
         핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
         스트리밍으로 호출 — 이미지 인코딩이 오래 걸려도 첫 토큰만 read_timeout 안에 오면 OK.
         """
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "messages": [{"role": "user", "content": prompt, "images": images_b64}],
             "stream": True,
             "think": False,   # 추론 비활성화 — 모든 토큰을 thinking이 아닌 content(CSV)로
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드 방지
@@ -361,34 +362,43 @@ class ReviewAgent:
     # ------------------------------------------------------------------
 
     def _vision_extract_pinmap(
-        self, image_b64: str, prompt: str, chip_hint: str = ""
+        self, images_b64: List[str], prompt: str, chip_hint: str = ""
     ) -> Tuple[str, str]:
-        """Gemma 4 31B 멀티모달로 회로도 이미지 → (pinmap_csv, vision_analysis).
+        """Gemma 4 31B 멀티모달로 회로도 이미지(1장 이상) → (pinmap_csv, vision_analysis).
 
+        여러 장은 한 설계의 여러 시트로 보고 하나의 통합 핀맵으로 추출.
         pinmap_csv: chip,pin,function,label 형식 CSV 문자열
         vision_analysis: 이미지에서 추출한 초기 분석 텍스트 (한국어)
         """
+        multi = len(images_b64) > 1
+        multi_note = (
+            f"\nThere are {len(images_b64)} schematic sheets of the SAME design. "
+            "Combine pins from ALL sheets into ONE merged pinmap. "
+            "If the same pin appears on multiple sheets, list it once.\n"
+            if multi else ""
+        )
         vision_prompt = (
             "You are an expert at reading STM32 motor driver schematics and extracting pin assignments.\n"
             f"Target chip: {chip_hint or 'STM32G4'}\n"
-            f"User requirements: {prompt}\n\n"
+            f"User requirements: {prompt}\n"
+            f"{multi_note}\n"
             "Output EXACTLY in this format (no extra commentary):\n\n"
             "CHIP: <chip name, e.g. STM32G474RET6>\n\n"
             "CSV:\n"
             "chip,pin,function,label\n"
             "<chip>,<pin>,<function>,<label>\n"
-            "... (all visible pins)\n\n"
+            "... (all visible pins across all sheets)\n\n"
             "SUMMARY:\n"
             "<2-3 sentences: key peripherals used (e.g. TIM1 6-ch complementary PWM, OPAMP current sense, FDCAN). "
             "No analysis or problem identification — that is done in a later stage.>\n\n"
             "Rules:\n"
             "- function must use STM32 HAL notation: TIM1_CH1, FDCAN1_TX, OPAMP1_VOUT, ADC1_IN1, etc.\n"
-            "- Include only pins clearly visible in the image.\n"
+            "- Include only pins clearly visible in the image(s).\n"
             "- CSV section: header + data rows only, no prose."
         )
 
-        logger.info("Vision extraction 시작 (model=%s)", GEMMA4_VISION_MODEL)
-        raw = self._ollama_multimodal(vision_prompt, image_b64, GEMMA4_VISION_MODEL)
+        logger.info("Vision extraction 시작 (model=%s, sheets=%d)", GEMMA4_VISION_MODEL, len(images_b64))
+        raw = self._ollama_multimodal(vision_prompt, images_b64, GEMMA4_VISION_MODEL)
 
         if not raw or len(raw.strip()) < 30:
             logger.warning("Vision extraction 응답 없음 또는 너무 짧음 (len=%d)", len(raw or ""))
@@ -782,15 +792,15 @@ class ReviewAgent:
           [B]       Hybrid RAG (Rule Engine 키워드 + Vision 분석으로 쿼리 보강)
           [C]       LLM Persona Debate (Vision 분석 포함 전체 컨텍스트)
         """
-        logger.info("ReviewAgent.run() chip=%s, has_image=%s", request.chip, bool(request.schematic_image_b64))
+        logger.info("ReviewAgent.run() chip=%s, image_count=%d", request.chip, len(request.schematic_images_b64))
 
         vision_analysis = ""
 
-        # ── [Vision] 이미지가 있으면 pinmap 추출 ──────────────────────────
-        if request.schematic_image_b64:
+        # ── [Vision] 이미지가 있으면 pinmap 추출 (여러 장은 한 설계로 종합) ──
+        if request.schematic_images_b64:
             _t0 = self._stage_start("vision")
             csv_from_vision, vision_analysis = self._vision_extract_pinmap(
-                request.schematic_image_b64,
+                request.schematic_images_b64,
                 request.prompt,
                 chip_hint=request.chip,
             )

@@ -389,21 +389,25 @@ with tab1:
 
         st.subheader("입력 방식")
 
-        # ── 이미지 업로드 (주 입력) ────────────────────────────────────────
-        st.markdown("**회로도 이미지** (권장 — Gemma 4 31B Vision 자동 분석)")
-        schematic_image = st.file_uploader(
+        # ── 이미지 업로드 (주 입력, 여러 장 가능) ──────────────────────────
+        st.markdown("**회로도 이미지** (권장 — Gemma 4 31B Vision 자동 분석, 여러 장 가능)")
+        schematic_files = st.file_uploader(
             "회로도 이미지 업로드",
             type=["jpg", "jpeg", "png", "bmp", "webp"],
-            help="JPEG/PNG 형식 회로도. Gemma 4 31B가 핀맵을 자동 추출합니다.",
+            help="JPEG/PNG 회로도. 여러 장 올리면 한 설계의 멀티 시트로 종합 분석합니다.",
             label_visibility="collapsed",
+            accept_multiple_files=True,
         )
-        if schematic_image:
-            st.image(schematic_image, caption="업로드된 회로도", use_container_width=True)
+        schematic_files = schematic_files or []
+        if schematic_files:
+            st.caption(f"업로드된 회로도 {len(schematic_files)}장")
+            for _img in schematic_files:
+                st.image(_img, caption=_img.name, use_container_width=True)
 
         st.divider()
 
         # ── CSV 보조 입력 ──────────────────────────────────────────────────
-        with st.expander("핀맵 CSV 직접 입력 (선택 — 이미지 없을 때 필수)", expanded=not bool(schematic_image)):
+        with st.expander("핀맵 CSV 직접 입력 (선택 — 이미지 없을 때 필수)", expanded=not bool(schematic_files)):
             csv_input_mode = st.radio(
                 "CSV 입력 방식", ["파일 업로드", "직접 입력"], horizontal=True, key="csv_mode"
             )
@@ -430,7 +434,7 @@ with tab1:
             else:
                 csv_text = st.text_area(
                     "CSV 직접 입력",
-                    value=EXAMPLE_CSV.strip() if not schematic_image else "",
+                    value=EXAMPLE_CSV.strip() if not schematic_files else "",
                     height=180,
                     help="chip,pin,function,label 헤더 포함",
                     placeholder="이미지를 업로드하면 자동 추출됩니다.",
@@ -492,7 +496,7 @@ with tab1:
     st.divider()
 
     # 입력 유효성 확인
-    has_image = schematic_image is not None or bool(st.session_state.pasted_image_b64)
+    has_image = bool(schematic_files) or bool(st.session_state.pasted_image_b64)
     has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
     can_submit = has_image or has_csv
 
@@ -549,22 +553,21 @@ with tab1:
                 st.stop()
 
             # multipart/form-data 조립 (bytes로 읽어서 thread에 넘김)
-            _files: dict = {}
+            # 같은 필드명(schematic_images)에 여러 파일을 보내려면 dict가 아닌 (필드, 파일) 튜플 리스트.
+            _files: list = []
             _data: dict = {"chip": chip, "prompt": prompt, "mode": mode_value}
 
-            if schematic_image is not None:
-                schematic_image.seek(0)
-                _files["schematic_image"] = (
-                    schematic_image.name, schematic_image.read(),
-                    schematic_image.type or "image/jpeg",
-                )
-            elif st.session_state.pasted_image_b64:
+            # 업로드한 여러 장 + 붙여넣기 이미지를 모두 한 설계의 시트로 전송
+            for _f in (schematic_files or []):
+                _f.seek(0)
+                _files.append(("schematic_images", (_f.name, _f.read(), _f.type or "image/jpeg")))
+            if st.session_state.pasted_image_b64:
                 b64_data = st.session_state.pasted_image_b64.split(",", 1)[-1]
-                _files["schematic_image"] = ("pasted_image.png", base64.b64decode(b64_data), "image/png")
+                _files.append(("schematic_images", ("pasted_image.png", base64.b64decode(b64_data), "image/png")))
 
             if csv_file is not None:
                 csv_file.seek(0)
-                _files["csv_file"] = (csv_file.name, csv_file.read(), "text/csv")
+                _files.append(("csv_file", (csv_file.name, csv_file.read(), "text/csv")))
             elif csv_text and csv_text.strip():
                 _data["pinmap_csv"] = csv_text
 

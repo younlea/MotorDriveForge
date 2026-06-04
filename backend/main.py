@@ -295,9 +295,13 @@ async def get_status():
 def review(
     chip: str = Form(..., description="예: STM32G474RET6"),
     prompt: str = Form(..., description="자연어 요구사항 프롬프트"),
+    schematic_images: List[UploadFile] = File(
+        default=[],
+        description="회로도 이미지 (JPEG/PNG, 여러 장 가능 = 한 설계의 멀티 시트). Gemma 4 Vision이 종합해 핀맵 자동 추출.",
+    ),
     schematic_image: Optional[UploadFile] = File(
         None,
-        description="회로도 이미지 (JPEG/PNG). 제공 시 Gemma 4 31B가 핀맵을 자동 추출.",
+        description="(하위 호환) 회로도 이미지 1장. schematic_images 사용 권장.",
     ),
     csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV (선택 — 이미지가 없을 때 필수)"),
     pinmap_csv: Optional[str] = Form(None, description="CSV 문자열 직접 입력 (선택)"),
@@ -314,12 +318,20 @@ def review(
       - fast: Rule Engine만 실행. errors > 0 이면 HTTP 403.
       - full: Vision + Rule Engine + RAG + LLM. errors 있어도 HTTP 200 (LLM 설명 포함).
     """
-    # 이미지 → base64
-    image_b64: Optional[str] = None
-    if schematic_image is not None:
-        image_bytes = schematic_image.file.read()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        logger.info("이미지 수신: %s (%.1f KB)", schematic_image.filename, len(image_bytes) / 1024)
+    # 이미지 → base64 목록 (schematic_images 우선, 없으면 하위호환 schematic_image)
+    uploads = [f for f in (schematic_images or []) if f is not None]
+    if not uploads and schematic_image is not None:
+        uploads = [schematic_image]
+
+    images_b64: List[str] = []
+    for f in uploads:
+        image_bytes = f.file.read()
+        if not image_bytes:
+            continue
+        images_b64.append(base64.b64encode(image_bytes).decode("utf-8"))
+        logger.info("이미지 수신: %s (%.1f KB)", f.filename, len(image_bytes) / 1024)
+    if len(images_b64) > 1:
+        logger.info("회로도 %d장 수신 — 한 설계로 종합 분석", len(images_b64))
 
     # CSV 소스 결정
     csv_text = ""
@@ -330,17 +342,17 @@ def review(
         csv_text = pinmap_csv
 
     # 이미지도 CSV도 없으면 거부
-    if image_b64 is None and not csv_text.strip():
+    if not images_b64 and not csv_text.strip():
         raise HTTPException(
             status_code=422,
-            detail="schematic_image(회로도 이미지) 또는 csv_file/pinmap_csv 중 하나를 제공해야 합니다.",
+            detail="schematic_images(회로도 이미지) 또는 csv_file/pinmap_csv 중 하나를 제공해야 합니다.",
         )
 
     req = ReviewRequest(
         chip=chip,
         pinmap_csv=csv_text,
         prompt=prompt,
-        schematic_image_b64=image_b64,
+        schematic_images_b64=images_b64,
         mode=mode,
     )
 
