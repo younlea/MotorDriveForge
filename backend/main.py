@@ -157,7 +157,7 @@ def _run_step3_job(job_id: str, vp: Dict[str, Any], prompt: str = "") -> None:
 # 요청/응답 로깅 미들웨어
 # ---------------------------------------------------------------------------
 
-_NO_LOG_PATHS = {"/v1/logs", "/v1/health"}
+_NO_LOG_PATHS = {"/v1/logs", "/v1/health", "/v1/review/partial"}
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
