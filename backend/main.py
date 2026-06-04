@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import threading
+from collections import deque
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -65,6 +66,18 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# 인메모리 로그 버퍼 (최근 200줄)
+_log_buffer: deque[str] = deque(maxlen=200)
+
+class _BufHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        _log_buffer.append(self.format(record))
+
+_buf_h = _BufHandler()
+_buf_h.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(name)s — %(message)s", "%H:%M:%S"))
+_buf_h.setLevel(logging.INFO)
+logging.getLogger().addHandler(_buf_h)
 
 # ---------------------------------------------------------------------------
 # FastAPI 앱
@@ -190,6 +203,11 @@ class ChatResponse(BaseModel):
 @app.get("/v1/health", tags=["System"])
 async def health():
     return {"status": "ok", "service": "stm32g4-agent-backend"}
+
+
+@app.get("/v1/logs", tags=["System"])
+async def get_logs(n: int = 50):
+    return {"logs": list(_log_buffer)[-n:]}
 
 
 # ---------------------------------------------------------------------------

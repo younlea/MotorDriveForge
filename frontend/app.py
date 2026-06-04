@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -111,6 +112,12 @@ for key, default in [
     ("step3_result", None),
     ("step3_hal_zip", None),
     ("step3_prompt", ""),
+    # 백그라운드 검증 태스크
+    ("_rv_running", False),
+    ("_rv_result", None),
+    ("_rv_error", None),
+    ("_rv_start", None),
+    ("_rv_cancel", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -130,6 +137,52 @@ def check_service(url: str, path: str = "", timeout: int = 3) -> bool:
 
 def status_icon(ok: bool) -> str:
     return "✅" if ok else "❌"
+
+
+REVIEW_TIMEOUT = 600  # 초 (agent timeout과 맞춤)
+
+
+def _circular_progress_html(pct: int, elapsed: float, remaining: float) -> str:
+    r = 54
+    circ = 2 * 3.14159 * r
+    offset = circ * (1 - pct / 100)
+    me, se = divmod(int(elapsed), 60)
+    mr, sr = divmod(int(remaining), 60)
+    start_ts = time.strftime("%H:%M:%S", time.localtime(time.time() - elapsed))
+    return f"""
+<div style="display:flex;align-items:center;gap:28px;padding:14px 0 10px 0">
+  <svg width="120" height="120" viewBox="0 0 120 120">
+    <circle cx="60" cy="60" r="{r}" fill="none" stroke="#e8e8e8" stroke-width="9"/>
+    <circle cx="60" cy="60" r="{r}" fill="none" stroke="#ff4b4b" stroke-width="9"
+      stroke-dasharray="{circ:.1f}" stroke-dashoffset="{offset:.1f}"
+      stroke-linecap="round" transform="rotate(-90 60 60)"/>
+    <text x="60" y="55" text-anchor="middle" font-size="21" font-weight="bold" fill="#222">{pct}%</text>
+    <text x="60" y="73" text-anchor="middle" font-size="10" fill="#999">진행중</text>
+  </svg>
+  <div style="line-height:1.9;font-family:monospace">
+    <div style="font-size:13px;color:#555">시작　<b>{start_ts}</b></div>
+    <div style="font-size:15px;color:#222">경과　<b>{me:02d}:{se:02d}</b></div>
+    <div style="font-size:15px;color:#e07000">만료　<b>{mr:02d}:{sr:02d}</b></div>
+    <div style="font-size:12px;color:#aaa;margin-top:6px">Gemma 4 31B 분석 중…</div>
+  </div>
+</div>"""
+
+
+def _run_review_bg(data: dict, files: dict) -> None:
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/v1/review",
+            data=data,
+            files=files if files else None,
+            timeout=REVIEW_TIMEOUT,
+        )
+        if not st.session_state._rv_cancel:
+            st.session_state._rv_result = r
+    except Exception as e:
+        if not st.session_state._rv_cancel:
+            st.session_state._rv_error = str(e)
+    finally:
+        st.session_state._rv_running = False
 
 
 with st.sidebar:
@@ -338,79 +391,110 @@ with tab1:
         "검증 실행 (Rule Engine + RAG + LLM)" if mode_value == "full" else "검증 실행 (Rule Engine only — Fast)"
     )
 
-    if st.button(
-        btn_label,
-        type="primary",
-        disabled=run_disabled,
-        use_container_width=True,
-        key="btn_review",
-    ):
-        if not prompt.strip():
-            st.error("프롬프트를 입력하세요.")
-            st.stop()
+    # ── 토글 버튼: 실행 중이면 중단, 아니면 실행 ──────────────────────────
+    if st.session_state._rv_running:
+        if st.button("⏹ 검증 중단", type="secondary", use_container_width=True, key="btn_stop"):
+            st.session_state._rv_cancel = True
+            st.session_state._rv_running = False
+            st.warning("검증이 중단되었습니다.")
+            st.rerun()
+    else:
+        if st.button(
+            btn_label,
+            type="primary",
+            disabled=run_disabled,
+            use_container_width=True,
+            key="btn_review",
+        ):
+            if not prompt.strip():
+                st.error("프롬프트를 입력하세요.")
+                st.stop()
 
-        spinner_msg = (
-            "Gemma 4 31B Vision으로 회로도 분석 중 → Rule Engine → RAG → LLM 검증 (총 60~180초 소요)..."
-            if has_image
-            else "STM32G4 Agent 검증 중 (LLM 응답에 30~120초 소요될 수 있습니다)..."
-        )
+            # multipart/form-data 조립 (bytes로 읽어서 thread에 넘김)
+            _files: dict = {}
+            _data: dict = {"chip": chip, "prompt": prompt, "mode": mode_value}
 
-        with st.spinner(spinner_msg):
-            try:
-                # multipart/form-data 조립
-                files: dict = {}
-                data: dict = {"chip": chip, "prompt": prompt, "mode": mode_value}
-
-                if schematic_image is not None:
-                    schematic_image.seek(0)
-                    files["schematic_image"] = (
-                        schematic_image.name,
-                        schematic_image,
-                        schematic_image.type or "image/jpeg",
-                    )
-                elif st.session_state.pasted_image_b64:
-                    b64_data = st.session_state.pasted_image_b64.split(",", 1)[-1]
-                    img_bytes = base64.b64decode(b64_data)
-                    files["schematic_image"] = ("pasted_image.png", img_bytes, "image/png")
-
-                if csv_file is not None:
-                    csv_file.seek(0)
-                    files["csv_file"] = (csv_file.name, csv_file, "text/csv")
-                elif csv_text and csv_text.strip():
-                    data["pinmap_csv"] = csv_text
-
-                r = requests.post(
-                    f"{BACKEND_URL}/v1/review",
-                    data=data,
-                    files=files if files else None,
-                    timeout=300,
+            if schematic_image is not None:
+                schematic_image.seek(0)
+                _files["schematic_image"] = (
+                    schematic_image.name, schematic_image.read(),
+                    schematic_image.type or "image/jpeg",
                 )
+            elif st.session_state.pasted_image_b64:
+                b64_data = st.session_state.pasted_image_b64.split(",", 1)[-1]
+                _files["schematic_image"] = ("pasted_image.png", base64.b64decode(b64_data), "image/png")
 
-                if r.status_code == 200:
-                    report = r.json()
-                    # full 모드: errors 있어도 200 반환 — errors 유무로 통과 여부 판단
-                    has_errors = bool(report.get("errors"))
-                    st.session_state.review_passed = not has_errors
-                    st.session_state.validated_pins = report.get("validated_pins", {})
-                    st.session_state.last_report = report
-                    st.session_state.vision_analysis = report.get("vision_analysis", "")
-                elif r.status_code == 403:
-                    # fast 모드: errors 있으면 403
-                    body = r.json()
-                    report = body.get("report", body)
-                    st.session_state.review_passed = False
-                    st.session_state.last_report = report
-                    st.session_state.vision_analysis = report.get("vision_analysis", "")
-                else:
-                    st.error(f"서버 오류 {r.status_code}: {r.text[:300]}")
-                    st.stop()
+            if csv_file is not None:
+                csv_file.seek(0)
+                _files["csv_file"] = (csv_file.name, csv_file.read(), "text/csv")
+            elif csv_text and csv_text.strip():
+                _data["pinmap_csv"] = csv_text
 
-            except requests.exceptions.Timeout:
-                st.error("요청 시간 초과 (300초). 서버 부하를 확인하세요.")
-                st.stop()
-            except Exception as e:
-                st.error(f"요청 실패: {e}")
-                st.stop()
+            st.session_state._rv_running = True
+            st.session_state._rv_result = None
+            st.session_state._rv_error = None
+            st.session_state._rv_cancel = False
+            st.session_state._rv_start = time.time()
+
+            try:
+                from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+                ctx = get_script_run_ctx()
+                t = threading.Thread(target=_run_review_bg, args=(_data, _files), daemon=True)
+                add_script_run_ctx(t, ctx)
+            except Exception:
+                t = threading.Thread(target=_run_review_bg, args=(_data, _files), daemon=True)
+            t.start()
+            st.rerun()
+
+    # ── 진행 중: 원형 프로그레스 + 로그 ──────────────────────────────────
+    if st.session_state._rv_running:
+        elapsed = time.time() - (st.session_state._rv_start or time.time())
+        remaining = max(0.0, REVIEW_TIMEOUT - elapsed)
+        pct = min(int(elapsed / REVIEW_TIMEOUT * 100), 99)
+        st.markdown(_circular_progress_html(pct, elapsed, remaining), unsafe_allow_html=True)
+
+        try:
+            _log_r = requests.get(f"{BACKEND_URL}/v1/logs?n=30", timeout=3)
+            if _log_r.status_code == 200:
+                _logs = _log_r.json().get("logs", [])
+                if _logs:
+                    with st.expander("서버 로그", expanded=True):
+                        st.code("\n".join(_logs), language=None)
+        except Exception:
+            pass
+
+        time.sleep(2)
+        st.rerun()
+
+    # ── 에러 표시 ────────────────────────────────────────────────────────
+    if st.session_state._rv_error:
+        _err = st.session_state._rv_error
+        st.session_state._rv_error = None
+        if "timed out" in _err.lower() or "timeout" in _err.lower():
+            st.error(f"요청 시간 초과 ({REVIEW_TIMEOUT}초). 서버 상태를 확인하세요.")
+        else:
+            st.error(f"요청 실패: {_err}")
+
+    # ── 결과 처리 (스레드 완료 시) ────────────────────────────────────────
+    _rv_resp = st.session_state._rv_result
+    if _rv_resp is not None:
+        st.session_state._rv_result = None
+        r = _rv_resp
+        if r.status_code == 200:
+            report = r.json()
+            has_errors = bool(report.get("errors"))
+            st.session_state.review_passed = not has_errors
+            st.session_state.validated_pins = report.get("validated_pins", {})
+            st.session_state.last_report = report
+            st.session_state.vision_analysis = report.get("vision_analysis", "")
+        elif r.status_code == 403:
+            body = r.json()
+            report = body.get("report", body)
+            st.session_state.review_passed = False
+            st.session_state.last_report = report
+            st.session_state.vision_analysis = report.get("vision_analysis", "")
+        else:
+            st.error(f"서버 오류 {r.status_code}: {r.text[:300]}")
 
     # ── 결과 표시 ──────────────────────────────────────────────────────────
     if st.session_state.last_report:
