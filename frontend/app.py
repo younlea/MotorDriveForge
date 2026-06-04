@@ -198,46 +198,38 @@ def _circular_progress_html(pct: int, elapsed: float, remaining: float) -> str:
 _STATE_RANK = {"wait": 0, "active": 1, "done": 2}
 
 
-def _update_stages_from_logs(logs: list[str]) -> None:
-    """새 로그로 session_state의 스테이지를 업그레이드만 함 (다운그레이드 없음)."""
-    text = "\n".join(logs)
+def _update_stages_from_partial(pr: dict) -> None:
+    """현재 실행의 partial(매 실행마다 백엔드가 비움)로 스테이지 갱신.
+
+    /v1/logs는 누적 버퍼라 이전 실행의 완료 마커가 남아 새 실행을 즉시 '완료'로
+    오인함 → partial.timing(이번 실행 전용)을 근거로 사용해 그 문제를 회피.
+    timing[key] = {elapsed:None} → 진행중(active), elapsed 값 있음 → 완료(done), 없음 → 대기.
+    """
     st_ = st.session_state._rv_stages
+    timing = pr.get("timing", {}) or {}
 
-    def _upgrade(key: str, new_state: str):
-        if _STATE_RANK[new_state] > _STATE_RANK[st_[key]]:
-            st_[key] = new_state
+    def _state_of(key: str):
+        t = timing.get(key)
+        if not isinstance(t, dict):
+            return None
+        return "done" if t.get("elapsed") is not None else "active"
 
-    # Vision
-    if "Vision extraction 완료" in text:
-        _upgrade("vision", "done")
-    elif "Vision extraction 시작" in text:
-        _upgrade("vision", "active")
+    def _upgrade(uikey: str, state):
+        if state and _STATE_RANK[state] > _STATE_RANK[st_[uikey]]:
+            st_[uikey] = state
 
-    # 핀맵
-    if "Vision CSV 사용" in text or "직접 입력 CSV" in text:
+    _upgrade("vision", _state_of("vision"))
+    # 핀맵: vision 완료/CSV 추출되면 done, vision 진행중이면 active
+    if pr.get("extracted_csv") or _state_of("vision") == "done":
         _upgrade("pinmap", "done")
-    elif st_["vision"] in ("active", "done"):
+    elif _state_of("vision") == "active":
         _upgrade("pinmap", "active")
-
-    # Rule Engine
-    if "[STAGE] rule_engine:done" in text:
-        _upgrade("rule_engine", "done")
-    elif "[STAGE] rule_engine:start" in text:
-        _upgrade("rule_engine", "active")
-
-    # RAG
-    if "[STAGE] rag:done" in text:
-        _upgrade("rag", "done")
-    elif "[STAGE] rag:start" in text:
-        _upgrade("rag", "active")
-    if "embed failed" in text or "(RAG 없음)" in text:
+    _upgrade("rule_engine", _state_of("rule_engine"))
+    _upgrade("rag", _state_of("rag"))
+    _upgrade("llm", _state_of("llm"))
+    # RAG 검색 결과가 0이면 경고 표시
+    if _state_of("rag") == "done" and pr.get("rag_docs_count") == 0:
         st.session_state._rv_rag_warn = True
-
-    # LLM
-    if "[STAGE] llm:done" in text:
-        _upgrade("llm", "done")
-    elif "[STAGE] llm:start" in text:
-        _upgrade("llm", "active")
 
 
 def _pipeline_status_html() -> str:
@@ -619,25 +611,22 @@ with tab1:
         pct = min(int(elapsed / REVIEW_TIMEOUT * 100), 99)
         st.markdown(_circular_progress_html(pct, elapsed, remaining), unsafe_allow_html=True)
 
-        _logs: list[str] = []
+        # 중간 결과/타이밍을 먼저 가져와 파이프라인 단계 갱신.
+        # /v1/logs는 누적 버퍼라 이전 실행의 완료 마커가 남음 → 단계 판단엔 쓰지 않고
+        # 매 실행마다 비워지는 partial을 근거로 사용 (재실행 시 단계가 옛 상태로 안 남음).
         try:
-            _log_r = requests.get(f"{BACKEND_URL}/v1/logs?n=60", timeout=3)
-            if _log_r.status_code == 200:
-                _logs = _log_r.json().get("logs", [])
+            _pr = requests.get(f"{BACKEND_URL}/v1/review/partial", timeout=3).json() or {}
         except Exception:
-            pass
+            _pr = {}
+        if _pr.get("timing"):
+            st.session_state["_rv_partial_timing"] = _pr["timing"]
+        _update_stages_from_partial(_pr)
 
-        # 파이프라인 단계 시각화 (로그로 스테이지 업데이트 후 렌더)
-        if _logs:
-            _update_stages_from_logs(_logs)
         st.markdown("**파이프라인 진행 상태**")
         st.markdown(_pipeline_status_html(), unsafe_allow_html=True)
 
-        # 중간 결과 + 타이밍 업데이트
+        # 중간 결과
         try:
-            _pr = requests.get(f"{BACKEND_URL}/v1/review/partial", timeout=3).json()
-            if _pr.get("timing"):
-                st.session_state["_rv_partial_timing"] = _pr["timing"]
             if _pr:
                 with st.expander("중간 결과 (현재까지 완료된 단계)", expanded=True):
                     if _pr.get("vision_analysis"):
@@ -661,6 +650,14 @@ with tab1:
         except Exception:
             pass
 
+        # 서버 로그 (표시용 — 단계 판단엔 쓰지 않음)
+        _logs: list[str] = []
+        try:
+            _log_r = requests.get(f"{BACKEND_URL}/v1/logs?n=60", timeout=3)
+            if _log_r.status_code == 200:
+                _logs = _log_r.json().get("logs", [])
+        except Exception:
+            pass
         if _logs:
             with st.expander("서버 로그", expanded=False):
                 st.code("\n".join(_logs[-30:]), language=None)
