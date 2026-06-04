@@ -102,7 +102,8 @@ for key, default in [
     ("last_report", None),
     ("vision_analysis", ""),
     ("extracted_csv", ""),
-    ("pasted_image_b64", None),
+    ("pasted_images_b64", []),     # Step1: Ctrl+V로 누적한 회로도 여러 장
+    ("_last_pasted_s1", None),     # 직전에 누적한 붙여넣기 값(중복 append 방지)
     ("chat_history", []),
     ("go_to_step2", False),
     ("step2_pasted_image_b64", None),
@@ -448,10 +449,22 @@ with tab1:
                         pass
 
     with col_right:
-        st.markdown("**스크린샷 붙여넣기** (Ctrl+V)")
+        st.markdown("**스크린샷 붙여넣기** (Ctrl+V — 여러 장 누적 가능)")
         pasted_val = _paste_comp(key="paste_zone", default=None)
-        if pasted_val is not None:
-            st.session_state.pasted_image_b64 = pasted_val if pasted_val else None
+        # 새 이미지를 붙여넣을 때만 누적 (rerun 시 같은 값 재append 방지)
+        if pasted_val and pasted_val != st.session_state._last_pasted_s1:
+            st.session_state.pasted_images_b64.append(pasted_val)
+            st.session_state._last_pasted_s1 = pasted_val
+        if st.session_state.pasted_images_b64:
+            _n = len(st.session_state.pasted_images_b64)
+            cap_col, clr_col = st.columns([3, 1])
+            cap_col.caption(f"붙여넣은 회로도 {_n}장")
+            if clr_col.button("초기화", key="clear_pasted"):
+                st.session_state.pasted_images_b64 = []
+                st.session_state._last_pasted_s1 = None
+                st.rerun()
+            for _pb in st.session_state.pasted_images_b64:
+                st.image(_pb, use_container_width=True)
 
         st.divider()
 
@@ -496,7 +509,7 @@ with tab1:
     st.divider()
 
     # 입력 유효성 확인
-    has_image = bool(schematic_files) or bool(st.session_state.pasted_image_b64)
+    has_image = bool(schematic_files) or bool(st.session_state.pasted_images_b64)
     has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
     can_submit = has_image or has_csv
 
@@ -561,9 +574,9 @@ with tab1:
             for _f in (schematic_files or []):
                 _f.seek(0)
                 _files.append(("schematic_images", (_f.name, _f.read(), _f.type or "image/jpeg")))
-            if st.session_state.pasted_image_b64:
-                b64_data = st.session_state.pasted_image_b64.split(",", 1)[-1]
-                _files.append(("schematic_images", ("pasted_image.png", base64.b64decode(b64_data), "image/png")))
+            for _i, _pb in enumerate(st.session_state.pasted_images_b64):
+                b64_data = _pb.split(",", 1)[-1]
+                _files.append(("schematic_images", (f"pasted_{_i+1}.png", base64.b64decode(b64_data), "image/png")))
 
             if csv_file is not None:
                 csv_file.seek(0)
