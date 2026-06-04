@@ -252,7 +252,7 @@ async def get_status():
 # ---------------------------------------------------------------------------
 
 @app.post("/v1/review", response_model=ReviewReport, tags=["Step 1"])
-async def review(
+def review(
     chip: str = Form(..., description="예: STM32G474RET6"),
     prompt: str = Form(..., description="자연어 요구사항 프롬프트"),
     schematic_image: Optional[UploadFile] = File(
@@ -545,7 +545,7 @@ async def step3_status(job_id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/v1/chat", response_model=ChatResponse, tags=["Step 1"])
-async def chat(request: ChatRequest):
+def chat(request: ChatRequest):
     """검증 결과 컨텍스트 + RAG + 대화 이력 → 전문가 답변."""
     try:
         result = get_agent().chat(
