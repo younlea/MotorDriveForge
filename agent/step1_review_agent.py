@@ -409,15 +409,17 @@ class ReviewAgent:
             "CHIP: <칩명, 예: STM32G431RBI6>\n\n"
             "CSV:\n"
             "chip,pin,function,label\n"
-            "<칩>,<핀 예 PA0>,<그 핀의 STM32 기능 HAL표기 예 ADC1_IN1 — 확실치 않으면 비움>,<회로도 신호이름 예 VSENS_VM>\n"
-            "... (보이는 모든 핀)\n\n"
+            "<칩>,<핀 예 PA0>,,<회로도 신호이름 예 VSENS_VM>\n"
+            "... (보이는 모든 핀. function 칸은 위 예시처럼 비워두세요)\n\n"
             "PERIPHERALS:\n"
             "<외부 부품/연결을 보이는 대로만 한 줄씩 (게이트드라이버·전류감지·보호·커넥터·전원). 안 보이면 생략>\n\n"
             "SUMMARY:\n"
             "<핵심 구성 1~2문장. 분석·문제지적은 하지 말 것>\n\n"
-            "원칙:\n"
+            "원칙 (가장 중요):\n"
+            "- 당신의 임무는 '핀 번호'와 '신호 이름(label)'을 정확히 읽는 것. 이 둘에만 집중하세요.\n"
             "- label(신호이름)은 회로도에 적힌 그대로. 절대 지어내지 말 것.\n"
-            "- function(STM32 기능)은 확실할 때만 채우고 모르면 비워둘 것 (틀린 추측보다 빈 칸이 낫다).\n"
+            "- function 칸은 회로도에 STM32 HAL 기능명(예: TIM1_CH1)이 핀 옆에 '직접 인쇄'된 경우만 적고, "
+            "그 외엔 반드시 비워두세요. 신호 이름을 보고 기능을 추측하지 마세요 (틀린 추측이 가장 나쁨).\n"
             "- 회로도에 실제로 보이는 핀만. 안 보이면 만들어내지 말 것.\n"
             "- STM32G4 고정핀(오인 금지): OSC_IN=PF0, OSC_OUT=PF1, OSC32_IN=PC14, OSC32_OUT=PC15, "
             "SWDIO=PA13, SWCLK=PA14, USB=PA11/PA12(오실레이터 아님)."
@@ -683,10 +685,12 @@ class ReviewAgent:
         if "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
             for _, row in pinmap_df.iterrows():
                 pin = str(row["pin"]).upper()
-                func = str(row["function"]).upper()
+                func = str(row["function"]).upper().strip()
+                if func in ("", "NAN", "NONE", "GPIO"):
+                    continue  # function 미지정(Vision이 신호이름만 읽은 경우)은 AF 검증 생략
                 if pin in self.pin_af_db:
                     valid_funcs = list(self.pin_af_db[pin].keys())
-                    if func not in valid_funcs and func != "GPIO" and not func.startswith("ADC") and not func.startswith("DAC"):
+                    if func not in valid_funcs and not func.startswith("ADC") and not func.startswith("DAC"):
                         warnings.append(
                             f"핀 AF 미확인: {pin} — {func}. "
                             f"DB 등록 기능: {', '.join(valid_funcs)}"
