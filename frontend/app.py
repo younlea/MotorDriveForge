@@ -504,6 +504,10 @@ with tab1:
         if st.button("⏹ 검증 중단", type="secondary", use_container_width=True, key="btn_stop"):
             st.session_state._rv_cancel = True
             st.session_state._rv_running = False
+            try:
+                requests.post(f"{BACKEND_URL}/v1/review/cancel", timeout=3)
+            except Exception:
+                pass
             st.warning("검증이 중단되었습니다.")
             st.rerun()
     else:

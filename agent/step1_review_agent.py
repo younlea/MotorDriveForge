@@ -183,6 +183,10 @@ class ReviewAgent:
         self.qdrant_url = qdrant_url.rstrip("/")
         self.collection = collection
         self.pin_af_db: Dict[str, Dict[str, str]] = self._load_pin_af_db(pin_af_db_path)
+        self.cancel_event = None  # threading.Event, set by backend on cancel request
+
+    def _is_cancelled(self) -> bool:
+        return self.cancel_event is not None and self.cancel_event.is_set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -728,6 +732,9 @@ ANALYSIS:
         if not requirements.chip:
             requirements.chip = request.chip
 
+        if self._is_cancelled():
+            raise InterruptedError("cancelled")
+
         logger.info("[STAGE] rule_engine:start")
         rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
         logger.info("[STAGE] rule_engine:done errors=%d warnings=%d", len(rule_errors), len(rule_warnings))
@@ -760,12 +767,18 @@ ANALYSIS:
             # Vision 초기 분석의 첫 200자를 RAG 쿼리에 반영
             rag_query += f" {vision_analysis[:200]}"
 
+        if self._is_cancelled():
+            raise InterruptedError("cancelled")
+
         logger.info("[STAGE] rag:start query_len=%d", len(rag_query))
         rag_docs = self.rag_query(rag_query, top_k=5)
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
         logger.info("[STAGE] rag:done docs=%d", len(rag_docs))
 
         # ── [C] LLM Persona Debate ─────────────────────────────────────────
+        if self._is_cancelled():
+            raise InterruptedError("cancelled")
+
         logger.info("[STAGE] llm:start")
         llm_errors, llm_warnings, llm_suggestions = self._llm_validate(
             request, requirements, pinmap_df, rag_context, vision_analysis

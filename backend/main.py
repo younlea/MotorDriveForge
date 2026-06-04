@@ -103,6 +103,9 @@ _step3_agent: Optional[Step3Agent] = None
 # Step 3 job store: job_id → {status, progress, message, result}
 _step3_jobs: Dict[str, Dict] = {}
 
+# 현재 실행 중인 review 취소 플래그
+_review_cancel_event = threading.Event()
+
 
 def get_agent() -> ReviewAgent:
     global _agent
@@ -215,6 +218,13 @@ async def get_logs(n: int = 50):
     return {"logs": list(_log_buffer)[-n:]}
 
 
+@app.post("/v1/review/cancel", tags=["Step 1"])
+async def cancel_review():
+    _review_cancel_event.set()
+    logger.info("검증 취소 요청 수신")
+    return {"status": "cancel_requested"}
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/status
 # ---------------------------------------------------------------------------
@@ -309,9 +319,15 @@ def review(
         mode=mode,
     )
 
+    _review_cancel_event.clear()
+    get_agent().cancel_event = _review_cancel_event
+
     try:
         report = get_agent().run(req)
     except Exception as e:
+        if _review_cancel_event.is_set():
+            logger.info("검증 취소됨")
+            raise HTTPException(status_code=499, detail="검증이 취소되었습니다.")
         logger.exception("ReviewAgent.run() 오류")
         raise HTTPException(status_code=500, detail=f"검증 에이전트 오류: {e}")
 
