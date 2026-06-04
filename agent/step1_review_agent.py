@@ -279,8 +279,9 @@ class ReviewAgent:
             "prompt": user,
             "system": system,
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드(~20GB)로 인한 지연/변동 방지
-            # num_ctx는 모델 기본값 유지 — 채팅 이력+리포트+RAG로 컨텍스트가 길어질 수 있어 자르지 않음.
-            "options": {"temperature": 0.1, "num_predict": 2048},
+            # num_ctx=64K: Ollama 기본은 VRAM 기반 자동 256K(=44GB)라 다른 모델을 밀어냄.
+            # 우리 실사용(채팅 이력+리포트+RAG)은 ~1만 토큰 → 64K면 6배 여유 + 멀티 상주(~30GB) 확보.
+            "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 65536},
         }
         try:
             # read_timeout: 첫 토큰까지(콜드 로드 포함) 최대 대기. 이후 토큰 간격은 짧음.
@@ -303,7 +304,8 @@ class ReviewAgent:
             "stream": True,
             "think": False,   # 추론 비활성화 — 모든 토큰을 thinking이 아닌 content(CSV)로
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드(~20GB)로 인한 지연/변동 방지
-            "options": {"temperature": 0.1, "num_predict": 2048},  # 핀맵 CSV는 핀 수만큼 길어질 수 있음
+            # num_ctx=64K: 기본 자동 256K는 KV 캐시로 메모리 과점유 → 멀티 상주 불가. 이미지+프롬프트엔 충분.
+            "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 65536},  # 핀맵 CSV는 핀 수만큼 길어질 수 있음
         }
         content_parts: List[str] = []
         thinking_parts: List[str] = []
