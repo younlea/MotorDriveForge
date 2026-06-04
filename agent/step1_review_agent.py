@@ -281,24 +281,45 @@ class ReviewAgent:
             return ""
 
     def _ollama_multimodal(self, prompt: str, image_b64: str, model: str) -> str:
-        """Ollama multimodal generate — 이미지 + 텍스트 → 응답 (Gemma 4 31B).
+        """Ollama multimodal — 이미지 + 텍스트 → 응답 (Gemma 4 31B).
 
+        /api/chat 사용 (OpenWebUI와 동일 경로). /api/generate는 Gemma 4 비전에서
+        이미지를 평가만 하고 생성 토큰을 0개 내는 경우가 있어 빈 응답이 나옴.
         핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
-        상세 설계 분석은 C단계 LLM이 수행하므로 여기선 CSV + 짧은 요약만.
         스트리밍으로 호출 — 이미지 인코딩이 오래 걸려도 첫 토큰만 read_timeout 안에 오면 OK.
         """
         payload = {
             "model": model,
-            "prompt": prompt,
-            "images": [image_b64],
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "stream": True,
             "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
             "options": {"temperature": 0.1, "num_predict": 600},  # CSV+SUMMARY에 충분
         }
+        parts: List[str] = []
+        done_reason = ""
         try:
-            # read_timeout: 첫 토큰까지(모델 로드 + 이미지 인코딩) 최대 대기. Vision은 이미지 처리가 느림.
-            return self._ollama_stream(payload, read_timeout=300)
+            with requests.post(
+                f"{self.ollama_url}/api/chat",
+                json=payload,
+                stream=True,
+                timeout=(10, 300),  # (connect, 첫 토큰까지 = 모델 로드 + 이미지 인코딩)
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    parts.append(obj.get("message", {}).get("content", ""))
+                    if obj.get("done"):
+                        done_reason = obj.get("done_reason", "")
+                        break
+            text = "".join(parts)
+            if not text.strip():
+                # 빈 응답 진단: done_reason으로 왜 멈췄는지 확인 (stop/length/load 등)
+                logger.warning("Vision chat 빈 응답 (done_reason=%s, chunks=%d)", done_reason, len(parts))
+            return text
         except Exception as e:
-            logger.error("Ollama multimodal error: %s", e)
+            logger.error("Ollama multimodal(chat) error: %s", e)
             return ""
 
     # ------------------------------------------------------------------
