@@ -151,11 +151,16 @@ def _run_step3_job(job_id: str, vp: Dict[str, Any], prompt: str = "") -> None:
 # 요청/응답 로깅 미들웨어
 # ---------------------------------------------------------------------------
 
+_NO_LOG_PATHS = {"/v1/logs", "/v1/health"}
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    path = request.url.path
+    if path in _NO_LOG_PATHS:
+        return await call_next(request)
     start = time.time()
     rid = str(uuid.uuid4())[:8]
-    logger.info("[%s] → %s %s", rid, request.method, request.url.path)
+    logger.info("[%s] → %s %s", rid, request.method, path)
     response = await call_next(request)
     elapsed = (time.time() - start) * 1000
     logger.info("[%s] ← %d (%.1f ms)", rid, response.status_code, elapsed)
