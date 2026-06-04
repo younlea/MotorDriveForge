@@ -239,23 +239,43 @@ class ReviewAgent:
             pass
         return GEMMA4_VISION_MODEL
 
+    def _ollama_stream(self, payload: Dict[str, Any], read_timeout: int) -> str:
+        """Ollama /api/generate 스트리밍 호출 — 토큰을 받는 즉시 누적.
+
+        non-streaming은 전체 응답이 끝날 때까지 1바이트도 안 오므로,
+        총 생성 시간 > timeout이면 무조건 read timeout. (OpenWebUI가 잘 되는 이유는 스트리밍)
+        스트리밍이면 read_timeout은 '토큰 사이 간격'에만 적용되므로,
+        첫 토큰까지의 지연(모델 로드 + 이미지 인코딩)만 커버하면 총 생성 시간은 무제한.
+        """
+        payload = {**payload, "stream": True}
+        parts: List[str] = []
+        with requests.post(
+            f"{self.ollama_url}/api/generate",
+            json=payload,
+            stream=True,
+            timeout=(10, read_timeout),  # (connect, read-between-chunks)
+        ) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                obj = json.loads(line)
+                parts.append(obj.get("response", ""))
+                if obj.get("done"):
+                    break
+        return "".join(parts)
+
     def _ollama_generate(self, system: str, user: str, model: str) -> str:
         payload = {
             "model": model,
             "prompt": user,
             "system": system,
-            "stream": False,
             "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드 방지
             "options": {"temperature": 0.1, "num_predict": 2048},
         }
         try:
-            r = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=300,  # LLM Debate는 생성량이 많으므로 넉넉하게
-            )
-            r.raise_for_status()
-            return r.json().get("response", "")
+            # read_timeout: 첫 토큰까지(모델 로드 포함) 최대 대기. 이후 토큰 간격은 짧음.
+            return self._ollama_stream(payload, read_timeout=300)
         except Exception as e:
             logger.error("Ollama generate error: %s", e)
             return ""
@@ -265,23 +285,18 @@ class ReviewAgent:
 
         핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
         상세 설계 분석은 C단계 LLM이 수행하므로 여기선 CSV + 짧은 요약만.
+        스트리밍으로 호출 — 이미지 인코딩이 오래 걸려도 첫 토큰만 read_timeout 안에 오면 OK.
         """
         payload = {
             "model": model,
             "prompt": prompt,
             "images": [image_b64],
-            "stream": False,
             "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
             "options": {"temperature": 0.1, "num_predict": 600},  # CSV+SUMMARY에 충분
         }
         try:
-            r = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=150,  # 모델 첫 로드(~60s) + 추론(~40s) + 마진
-            )
-            r.raise_for_status()
-            return r.json().get("response", "")
+            # read_timeout: 첫 토큰까지(모델 로드 + 이미지 인코딩) 최대 대기. Vision은 이미지 처리가 느림.
+            return self._ollama_stream(payload, read_timeout=300)
         except Exception as e:
             logger.error("Ollama multimodal error: %s", e)
             return ""
