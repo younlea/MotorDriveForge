@@ -292,10 +292,12 @@ class ReviewAgent:
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
             "stream": True,
+            "think": False,   # 추론 비활성화 — 모든 토큰을 thinking이 아닌 content(CSV)로
             "keep_alive": "30m",  # 모델 메모리 상주 — 매 호출 재로드(~20GB) 방지
-            "options": {"temperature": 0.1, "num_predict": 600},  # CSV+SUMMARY에 충분
+            "options": {"temperature": 0.1, "num_predict": 2048},  # 핀맵 CSV는 핀 수만큼 길어질 수 있음
         }
-        parts: List[str] = []
+        content_parts: List[str] = []
+        thinking_parts: List[str] = []
         done_reason = ""
         try:
             with requests.post(
@@ -309,15 +311,24 @@ class ReviewAgent:
                     if not line:
                         continue
                     obj = json.loads(line)
-                    parts.append(obj.get("message", {}).get("content", ""))
+                    msg = obj.get("message", {})
+                    content_parts.append(msg.get("content", "") or "")
+                    thinking_parts.append(msg.get("thinking", "") or "")
                     if obj.get("done"):
                         done_reason = obj.get("done_reason", "")
                         break
-            text = "".join(parts)
-            if not text.strip():
-                # 빈 응답 진단: done_reason으로 왜 멈췄는지 확인 (stop/length/load 등)
-                logger.warning("Vision chat 빈 응답 (done_reason=%s, chunks=%d)", done_reason, len(parts))
-            return text
+            content = "".join(content_parts)
+            thinking = "".join(thinking_parts)
+            # think:False가 무시되어 thinking으로만 출력된 경우 폴백
+            if not content.strip() and thinking.strip():
+                logger.warning(
+                    "Vision content 비어있음 — thinking 폴백 사용 (thinking_len=%d, done_reason=%s)",
+                    len(thinking), done_reason,
+                )
+                return thinking
+            if not content.strip():
+                logger.warning("Vision chat 빈 응답 (done_reason=%s, chunks=%d)", done_reason, len(content_parts))
+            return content
         except Exception as e:
             logger.error("Ollama multimodal(chat) error: %s", e)
             return ""
