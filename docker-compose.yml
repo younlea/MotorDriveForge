@@ -35,8 +35,12 @@ services:
     container_name: stm32_backend
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    # host.docker.internal → 호스트 게이트웨이로 매핑. compose 네트워크 재생성 시
+    # 브리지 서브넷/게이트웨이 IP가 바뀌어도 호스트 Ollama(0.0.0.0:11434)에 안정적으로 연결.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - OLLAMA_URL=http://172.18.0.1:11434
+      - OLLAMA_URL=http://host.docker.internal:11434
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:-stm32g4_docs}
       - PIN_AF_DB_PATH=/app/agent/pin_af_db.json
@@ -46,8 +50,8 @@ services:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
       - HF_HOME=/hf_cache
-      - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
-      - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
+      - no_proxy=localhost,127.0.0.1,host.docker.internal,qdrant,backend,frontend,172.16.0.0/12
+      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ioc_outputs:/tmp/ioc_outputs
       - review_results:/app/review_results
@@ -75,12 +79,14 @@ services:
     container_name: stm32_frontend
     ports:
       - "${FRONTEND_PORT:-8501}:8501"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - BACKEND_URL=http://backend:8000
-      - OLLAMA_URL=http://172.18.0.1:11434
+      - OLLAMA_URL=http://host.docker.internal:11434
       - QDRANT_URL=http://qdrant:6333
-      - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
-      - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
+      - no_proxy=localhost,127.0.0.1,host.docker.internal,qdrant,backend,frontend,172.16.0.0/12
+      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ./agent:/app/agent:ro
     depends_on:

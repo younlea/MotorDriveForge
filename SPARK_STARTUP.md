@@ -65,11 +65,13 @@ sudo ss -tlnp | grep 11434 || sudo lsof -i:11434
 ai-in                              # = sudo docker exec -it ai-workspace-corp /bin/bash
 ps aux | grep ollama               # 현재 실행 방식/런처 확인
 pkill ollama; sleep 2
-OLLAMA_MAX_LOADED_MODELS=3 OLLAMA_KEEP_ALIVE=-1 nohup ollama serve > /tmp/ollama.log 2>&1 &
+OLLAMA_HOST=0.0.0.0 OLLAMA_MAX_LOADED_MODELS=3 OLLAMA_KEEP_ALIVE=-1 nohup ollama serve > /tmp/ollama.log 2>&1 &
 ```
 
 호스트 프로세스로 도는 경우 — 위 `pkill`/`nohup ... ollama serve` 줄을 호스트에서 실행.
 
+- `OLLAMA_HOST=0.0.0.0`: **반드시 유지.** 이게 없으면 Ollama가 127.0.0.1에만 바인딩되어
+  Docker 컨테이너(backend/frontend)가 접속 못 함 → 상태창 Ollama "X". 재시작 시 빠뜨리지 말 것.
 - `OLLAMA_MAX_LOADED_MODELS`: 동시에 메모리에 유지할 모델 수. 1보다 크면 됨(모델 2개라
   2면 충분, 여유로 3). **이 값이 1이면 앱의 `keep_alive:-1`도 소용없이 서로 밀어냄.**
 - `OLLAMA_KEEP_ALIVE=-1`: idle이어도 모델을 안 내림.
@@ -236,6 +238,7 @@ streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 |---|---|---|
 | `Connection refused :11434` | Ollama 미실행 | `ollama serve` |
 | Vision 매번 느림/timeout, `ollama ps`가 비었거나 다른 모델만 보임 | 공유 Ollama가 모델 1개만 상주 → 호출마다 콜드 로드(evict) | Step 0.5 — `OLLAMA_MAX_LOADED_MODELS≥2`로 `ollama serve` 재시작 (systemd 아님) |
+| `start.sh restart` 후 상태창 Ollama "X" | compose가 `host.docker.internal`(host-gateway)로 호스트 연결 — Ollama가 127.0.0.1에만 바인딩됐거나 게이트웨이 변동 | `OLLAMA_HOST=0.0.0.0`로 `ollama serve` 재시작. compose는 이미 host-gateway 사용(하드코딩 IP 제거됨) |
 | `Connection refused :6333` | Qdrant 미실행 | `docker start qdrant` |
 | RAG 결과 없음 | embed_and_index.py 미실행 | Step 3 재실행 |
 | `gemma4:31b not found` | 모델 미로드 | `ollama pull gemma4:31b` |
