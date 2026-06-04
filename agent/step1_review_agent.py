@@ -232,7 +232,7 @@ class ReviewAgent:
             r = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=120,
+                timeout=600,
             )
             r.raise_for_status()
             return r.json().get("response", "")
@@ -253,7 +253,7 @@ class ReviewAgent:
             r = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=180,
+                timeout=600,
             )
             r.raise_for_status()
             return r.json().get("response", "")
