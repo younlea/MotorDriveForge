@@ -728,7 +728,9 @@ ANALYSIS:
         if not requirements.chip:
             requirements.chip = request.chip
 
+        logger.info("[STAGE] rule_engine:start")
         rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
+        logger.info("[STAGE] rule_engine:done errors=%d warnings=%d", len(rule_errors), len(rule_warnings))
 
         # fast 모드: Rule Engine 결과만 즉시 반환 (LLM/RAG 호출 없음)
         if request.mode == "fast":
@@ -758,13 +760,18 @@ ANALYSIS:
             # Vision 초기 분석의 첫 200자를 RAG 쿼리에 반영
             rag_query += f" {vision_analysis[:200]}"
 
+        logger.info("[STAGE] rag:start query_len=%d", len(rag_query))
         rag_docs = self.rag_query(rag_query, top_k=5)
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
+        logger.info("[STAGE] rag:done docs=%d", len(rag_docs))
 
         # ── [C] LLM Persona Debate ─────────────────────────────────────────
+        logger.info("[STAGE] llm:start")
         llm_errors, llm_warnings, llm_suggestions = self._llm_validate(
             request, requirements, pinmap_df, rag_context, vision_analysis
         )
+
+        logger.info("[STAGE] llm:done")
 
         # ── 결과 합산 (중복 제거) ──────────────────────────────────────────
         all_errors = list(dict.fromkeys(rule_errors + llm_errors))

@@ -168,6 +168,68 @@ def _circular_progress_html(pct: int, elapsed: float, remaining: float) -> str:
 </div>"""
 
 
+def _pipeline_status_html(logs: list[str]) -> str:
+    log_text = "\n".join(logs)
+
+    def _stage(key: str):
+        has_start = f"[STAGE] {key}:start" in log_text
+        has_done  = f"[STAGE] {key}:done"  in log_text
+        if has_done:   return "done"
+        if has_start:  return "active"
+        return "wait"
+
+    vision_state  = "done"  if "Vision extraction 완료" in log_text else (
+                    "active" if "Vision extraction 시작"  in log_text else "wait")
+    pinmap_state  = "done"  if ("Vision CSV 사용" in log_text or "직접 입력 CSV" in log_text) else (
+                    "active" if vision_state == "done" else "wait")
+    rule_state    = _stage("rule_engine")
+    rag_state     = _stage("rag")
+    llm_state     = _stage("llm")
+
+    rag_warn = "embed failed" in log_text or "RAG 없음" in log_text
+
+    def _box(label: str, state: str, warn: bool = False) -> str:
+        colors = {
+            "done":   ("#e8f5e9", "#2e7d32", "#43a047"),
+            "active": ("#fff8e1", "#f57f17", "#ffa726"),
+            "wait":   ("#f5f5f5", "#9e9e9e", "#bdbdbd"),
+        }
+        bg, text, border = colors[state]
+        icon = {"done": "✅", "active": "⏳", "wait": "⬜"}[state]
+        if warn and state == "done":
+            bg, text, border = "#fff3e0", "#e65100", "#ff9800"
+            icon = "⚠️"
+        return (
+            f'<div style="background:{bg};border:2px solid {border};border-radius:10px;'
+            f'padding:10px 14px;min-width:110px;text-align:center;'
+            f'box-shadow:0 1px 4px rgba(0,0,0,.1)">'
+            f'<div style="font-size:20px">{icon}</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:{text};margin-top:4px">{label}</div>'
+            f'</div>'
+        )
+
+    arrow = '<div style="font-size:22px;color:#bdbdbd;align-self:center">→</div>'
+
+    boxes = [
+        _box("이미지 분석",  vision_state),
+        arrow,
+        _box("핀맵 추론",   pinmap_state),
+        arrow,
+        _box("Rule Engine", rule_state),
+        arrow,
+        _box("RAG 검색",    rag_state, warn=rag_warn),
+        arrow,
+        _box("LLM 리뷰",    llm_state),
+    ]
+
+    inner = "\n".join(boxes)
+    return (
+        f'<div style="display:flex;align-items:stretch;gap:8px;'
+        f'padding:12px 0;flex-wrap:nowrap;overflow-x:auto">'
+        f'{inner}</div>'
+    )
+
+
 def _run_review_bg(data: dict, files: dict) -> None:
     try:
         r = requests.post(
@@ -446,22 +508,28 @@ with tab1:
             t.start()
             st.rerun()
 
-    # ── 진행 중: 원형 프로그레스 + 로그 ──────────────────────────────────
+    # ── 진행 중: 원형 프로그레스 + 파이프라인 GUI + 로그 ─────────────────
     if st.session_state._rv_running:
         elapsed = time.time() - (st.session_state._rv_start or time.time())
         remaining = max(0.0, REVIEW_TIMEOUT - elapsed)
         pct = min(int(elapsed / REVIEW_TIMEOUT * 100), 99)
         st.markdown(_circular_progress_html(pct, elapsed, remaining), unsafe_allow_html=True)
 
+        _logs: list[str] = []
         try:
-            _log_r = requests.get(f"{BACKEND_URL}/v1/logs?n=30", timeout=3)
+            _log_r = requests.get(f"{BACKEND_URL}/v1/logs?n=60", timeout=3)
             if _log_r.status_code == 200:
                 _logs = _log_r.json().get("logs", [])
-                if _logs:
-                    with st.expander("서버 로그", expanded=True):
-                        st.code("\n".join(_logs), language=None)
         except Exception:
             pass
+
+        # 파이프라인 단계 시각화
+        st.markdown("**파이프라인 진행 상태**")
+        st.markdown(_pipeline_status_html(_logs), unsafe_allow_html=True)
+
+        if _logs:
+            with st.expander("서버 로그", expanded=False):
+                st.code("\n".join(_logs[-30:]), language=None)
 
         time.sleep(2)
         st.rerun()
