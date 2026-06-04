@@ -70,6 +70,8 @@ services:
       - "${FRONTEND_PORT:-8501}:8501"
     environment:
       - BACKEND_URL=http://backend:8000
+    volumes:
+      - ./agent:/app/agent:ro
     depends_on:
       backend:
         condition: service_healthy
