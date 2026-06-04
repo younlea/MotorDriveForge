@@ -581,6 +581,32 @@ with tab1:
         st.markdown("**파이프라인 진행 상태**")
         st.markdown(_pipeline_status_html(), unsafe_allow_html=True)
 
+        # 중간 결과 표시
+        try:
+            _pr = requests.get(f"{BACKEND_URL}/v1/review/partial", timeout=3).json()
+            if _pr:
+                with st.expander("중간 결과 (현재까지 완료된 단계)", expanded=True):
+                    if _pr.get("vision_analysis"):
+                        st.markdown("**Vision 분석**")
+                        st.markdown(_pr["vision_analysis"][:800] + ("…" if len(_pr.get("vision_analysis","")) > 800 else ""))
+                    if _pr.get("extracted_csv"):
+                        st.markdown("**추출된 핀맵 CSV**")
+                        st.code(_pr["extracted_csv"][:600], language="text")
+                    if "rule_errors" in _pr:
+                        errs = _pr["rule_errors"]
+                        warns = _pr["rule_warnings"]
+                        st.markdown(f"**Rule Engine** — 오류 {len(errs)}건 / 경고 {len(warns)}건")
+                        for e in errs[:5]:
+                            st.error(e)
+                        for w in warns[:5]:
+                            st.warning(w)
+                    if "rag_docs_count" in _pr:
+                        st.markdown(f"**RAG** — 검색된 청크: {_pr['rag_docs_count']}개")
+                    if "llm_errors" in _pr:
+                        st.markdown(f"**LLM** — 추가 오류 {len(_pr['llm_errors'])}건 / 제안 {len(_pr.get('llm_suggestions',[]))}건")
+        except Exception:
+            pass
+
         if _logs:
             with st.expander("서버 로그", expanded=False):
                 st.code("\n".join(_logs[-30:]), language=None)

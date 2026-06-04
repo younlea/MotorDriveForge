@@ -184,9 +184,13 @@ class ReviewAgent:
         self.collection = collection
         self.pin_af_db: Dict[str, Dict[str, str]] = self._load_pin_af_db(pin_af_db_path)
         self.cancel_event = None  # threading.Event, set by backend on cancel request
+        self.partial: Dict[str, Any] = {}  # 단계별 중간 결과 저장
 
     def _is_cancelled(self) -> bool:
         return self.cancel_event is not None and self.cancel_event.is_set()
+
+    def _save_partial(self, **kwargs) -> None:
+        self.partial.update(kwargs)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -701,6 +705,7 @@ ANALYSIS:
                 request.prompt,
                 chip_hint=request.chip,
             )
+            self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision)
             # 직접 입력 CSV가 없을 때만 Vision CSV 사용
             if not request.pinmap_csv.strip() and csv_from_vision:
                 request.pinmap_csv = csv_from_vision
@@ -738,6 +743,7 @@ ANALYSIS:
         logger.info("[STAGE] rule_engine:start")
         rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
         logger.info("[STAGE] rule_engine:done errors=%d warnings=%d", len(rule_errors), len(rule_warnings))
+        self._save_partial(rule_errors=rule_errors, rule_warnings=rule_warnings)
 
         # fast 모드: Rule Engine 결과만 즉시 반환 (LLM/RAG 호출 없음)
         if request.mode == "fast":
@@ -774,6 +780,7 @@ ANALYSIS:
         rag_docs = self.rag_query(rag_query, top_k=5)
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
         logger.info("[STAGE] rag:done docs=%d", len(rag_docs))
+        self._save_partial(rag_docs_count=len(rag_docs), rag_context_preview=rag_context[:500])
 
         # ── [C] LLM Persona Debate ─────────────────────────────────────────
         if self._is_cancelled():
@@ -785,6 +792,7 @@ ANALYSIS:
         )
 
         logger.info("[STAGE] llm:done")
+        self._save_partial(llm_errors=llm_errors, llm_warnings=llm_warnings, llm_suggestions=llm_suggestions)
 
         # ── 결과 합산 (중복 제거) ──────────────────────────────────────────
         all_errors = list(dict.fromkeys(rule_errors + llm_errors))

@@ -106,6 +106,9 @@ _step3_jobs: Dict[str, Dict] = {}
 # 현재 실행 중인 review 취소 플래그
 _review_cancel_event = threading.Event()
 
+# 단계별 중간 결과 저장소
+_review_partial: Dict[str, Any] = {}
+
 
 def get_agent() -> ReviewAgent:
     global _agent
@@ -225,6 +228,11 @@ async def cancel_review():
     return {"status": "cancel_requested"}
 
 
+@app.get("/v1/review/partial", tags=["Step 1"])
+async def get_partial_results():
+    return _review_partial
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/status
 # ---------------------------------------------------------------------------
@@ -320,7 +328,10 @@ def review(
     )
 
     _review_cancel_event.clear()
-    get_agent().cancel_event = _review_cancel_event
+    _review_partial.clear()
+    agent = get_agent()
+    agent.cancel_event = _review_cancel_event
+    agent.partial = _review_partial
 
     try:
         report = get_agent().run(req)
