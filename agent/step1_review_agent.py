@@ -274,17 +274,26 @@ class ReviewAgent:
                     break
         return "".join(parts)
 
-    def _ollama_generate(self, system: str, user: str, model: str) -> str:
-        # think는 명시하지 않음(기본=추론 ON). 리뷰 Q&A(chat)·LLM Debate는 분석형이라
-        # 근거 있는 답을 위해 추론이 필요. Vision OCR만 _ollama_multimodal에서 think=False.
+    def _ollama_generate(
+        self, system: str, user: str, model: str,
+        think: bool = False, num_predict: int = 2048,
+    ) -> str:
+        """Ollama 텍스트 생성.
+
+        think: gemma4-fast(=31b)는 추론 모델이라 think=True면 thinking에 토큰을 쏟다
+        num_predict를 소진해 정작 답(response)을 못 내는 경우가 있음(빈 응답).
+        - JSON 구조 출력(LLM Debate)·구조적 파싱(요구사항)은 think=False (안정성 우선).
+        - 자유 서술형 답(채팅)만 think=True로 추론 사용 + num_predict 여유 확보.
+        """
         payload = {
             "model": model,
             "prompt": user,
             "system": system,
+            "think": think,
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드 방지
-            # num_ctx는 일부러 지정 안 함 — gemma4-fast Modelfile의 기본 컨텍스트(32K)를 따라
+            # num_ctx는 일부러 지정 안 함 — gemma4-fast Modelfile의 기본 컨텍스트를 따라
             # webui와 같은 runner를 공유하기 위함. 여기서 다른 값을 주면 별도 인스턴스로 분리됨.
-            "options": {"temperature": 0.1, "num_predict": 2048},
+            "options": {"temperature": 0.1, "num_predict": num_predict},
         }
         try:
             # read_timeout: 첫 토큰까지(콜드 로드 포함) 최대 대기. 이후 토큰 간격은 짧음.
@@ -746,9 +755,10 @@ class ReviewAgent:
 사용자 질문: {question}"""
 
         model = self._available_model()
-        answer = self._ollama_generate(system_prompt, user_prompt, model)
+        # 채팅은 자유 서술형이라 추론(think) 사용. thinking이 답을 잡아먹지 않게 num_predict 여유.
+        answer = self._ollama_generate(system_prompt, user_prompt, model, think=True, num_predict=4096)
         if not answer:
-            answer = "Ollama 서버에 연결할 수 없거나 모델이 로드되지 않았습니다."
+            answer = "답변 생성에 실패했습니다(빈 응답). 다시 시도하거나 질문을 더 구체적으로 해주세요."
 
         return {"answer": answer, "sources": sources}
 
@@ -947,9 +957,9 @@ Reference documents (RAG):
 
 Validate the pinmap and return JSON."""
 
-        raw = self._ollama_generate(system, user, model)
+        raw = self._ollama_generate(system, user, model)  # think=False (기본) — JSON 안정 출력
         if not raw:
-            return [], [], ["LLM 검증 연결 실패 — 규칙 엔진 결과만 사용됩니다."]
+            return [], [], ["LLM 검증 응답 없음 — 규칙 엔진 결과만 사용됩니다."]
 
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
