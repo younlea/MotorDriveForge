@@ -161,7 +161,7 @@ def status_icon(ok: bool) -> str:
     return "✅" if ok else "❌"
 
 
-REVIEW_TIMEOUT = 600  # 초 (agent timeout과 맞춤)
+REVIEW_TIMEOUT = 3600  # 사실상 무제한 (중단 버튼으로 수동 취소)
 
 
 def _circular_progress_html(pct: int, elapsed: float, remaining: float) -> str:
@@ -302,7 +302,7 @@ def _run_review_bg(data: dict, files: dict) -> None:
             f"{BACKEND_URL}/v1/review",
             data=data,
             files=files if files else None,
-            timeout=REVIEW_TIMEOUT,
+            timeout=None,
         )
         if not st.session_state._rv_cancel:
             st.session_state._rv_result = r
@@ -638,10 +638,7 @@ with tab1:
     if st.session_state._rv_error:
         _err = st.session_state._rv_error
         st.session_state._rv_error = None
-        if "timed out" in _err.lower() or "timeout" in _err.lower():
-            st.error(f"요청 시간 초과 ({REVIEW_TIMEOUT}초). 서버 상태를 확인하세요.")
-        else:
-            st.error(f"요청 실패: {_err}")
+        st.error(f"요청 실패: {_err}")
 
     # ── 결과 처리 (스레드 완료 시) ────────────────────────────────────────
     _rv_resp = st.session_state._rv_result

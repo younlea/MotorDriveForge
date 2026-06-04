@@ -353,6 +353,8 @@ def review(
     try:
         report = get_agent().run(req)
     except Exception as e:
+        if _review_partial:
+            _save_review_to_disk(_review_partial, chip, status="error")
         if _review_cancel_event.is_set():
             logger.info("검증 취소됨")
             raise HTTPException(status_code=499, detail="검증이 취소되었습니다.")
