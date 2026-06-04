@@ -828,7 +828,7 @@ with tab1:
                                 ],
                                 "report_context": _report,
                             },
-                            timeout=120,
+                            timeout=600,  # LLM 답변 생성(gemma4:31b)이 길 수 있음 — 백엔드 생성 예산과 맞춤
                         )
                         if _r.status_code == 200:
                             _data = _r.json()

@@ -276,6 +276,7 @@ class ReviewAgent:
             "model": model,
             "prompt": user,
             "system": system,
+            "think": False,   # 추론 비활성화 — gemma4:31b가 thinking에 토큰/시간 낭비하지 않게 (Vision과 동일)
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드(~20GB)로 인한 지연/변동 방지
             "options": {"temperature": 0.1, "num_predict": 2048},
         }
