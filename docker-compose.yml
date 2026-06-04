@@ -36,20 +36,20 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_URL=http://172.18.0.1:11434
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:-stm32g4_docs}
       - PIN_AF_DB_PATH=/app/agent/pin_af_db.json
       - IOC_OUTPUT_DIR=/tmp/ioc_outputs
       - CODE_OUTPUT_DIR=/tmp/code_outputs
+      - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
+      - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ioc_outputs:/tmp/ioc_outputs
       - ./agent:/app/agent:ro
     depends_on:
       qdrant:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8000' 2>/dev/null || exit 1"]
@@ -70,6 +70,8 @@ services:
       - "${FRONTEND_PORT:-8501}:8501"
     environment:
       - BACKEND_URL=http://backend:8000
+      - no_proxy=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
+      - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ./agent:/app/agent:ro
     depends_on:
