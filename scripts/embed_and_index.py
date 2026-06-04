@@ -114,7 +114,8 @@ def main():
 
     # 통계
     info = client.get_collection(COLLECTION_NAME)
-    log.info("완료 — 컬렉션 통계: vectors=%s", info.vectors_count)
+    count = getattr(info, "vectors_count", None) or getattr(info.points_count, "__int__", lambda: info.points_count)()
+    log.info("완료 — 컬렉션 포인트 수: %s", count)
 
 
 if __name__ == "__main__":
