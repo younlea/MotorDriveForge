@@ -52,6 +52,9 @@ IOC_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CODE_OUTPUT_DIR = Path(os.getenv("CODE_OUTPUT_DIR", "/tmp/code_outputs"))
 CODE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+REVIEW_RESULTS_DIR = Path(os.getenv("REVIEW_RESULTS_DIR", "/app/review_results"))
+REVIEW_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
 # CubeMX CLI 탐색 경로 (우선순위 순)
 CUBEMX_SEARCH_PATHS = [
     os.getenv("CUBEMX_PATH", ""),
@@ -108,6 +111,17 @@ _review_cancel_event = threading.Event()
 
 # 단계별 중간 결과 저장소
 _review_partial: Dict[str, Any] = {}
+
+
+def _save_review_to_disk(partial: Dict[str, Any], chip: str, status: str = "completed") -> Path:
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    safe_chip = chip.replace("/", "_")
+    fname = REVIEW_RESULTS_DIR / f"review_{ts}_{safe_chip}_{status}.json"
+    payload = {**partial, "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "chip": chip, "status": status}
+    with open(fname, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    logger.info("결과 저장: %s", fname.name)
+    return fname
 
 
 def get_agent() -> ReviewAgent:
@@ -225,6 +239,9 @@ async def get_logs(n: int = 50):
 async def cancel_review():
     _review_cancel_event.set()
     logger.info("검증 취소 요청 수신")
+    if _review_partial:
+        chip = _review_partial.get("chip", "unknown")
+        _save_review_to_disk(_review_partial, chip, status="cancelled")
     return {"status": "cancel_requested"}
 
 
@@ -344,6 +361,8 @@ def review(
 
     # fast 모드: errors 있으면 403 (CI 게이트)
     # full 모드: errors 있어도 200 (LLM 자연어 설명 포함)
+    _save_review_to_disk(_review_partial, chip, status="completed")
+
     if report.errors and mode == "fast":
         return JSONResponse(
             status_code=403,

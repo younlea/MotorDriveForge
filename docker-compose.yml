@@ -46,6 +46,7 @@ services:
       - NO_PROXY=localhost,127.0.0.1,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ioc_outputs:/tmp/ioc_outputs
+      - review_results:/app/review_results
       - ./agent:/app/agent:ro
     depends_on:
       qdrant:
@@ -91,4 +92,6 @@ volumes:
   qdrant_storage:
     driver: local
   ioc_outputs:
+    driver: local
+  review_results:
     driver: local
