@@ -11,11 +11,13 @@ echo "RAG 임베딩 작업을 위한 일회용 도커 컨테이너를 시작합�
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
 
 docker run --rm -it \
+  --gpus all \
   -v "$(pwd)":/app \
   -v "${HF_CACHE}":/root/.cache/huggingface \
   -w /app \
   --network motordriveforge_default \
   -u root \
+  -e CUDA_VISIBLE_DEVICES=0 \
   -e CURL_CA_BUNDLE="" \
   -e REQUESTS_CA_BUNDLE="" \
   -e PYTHONHTTPSVERIFY=0 \

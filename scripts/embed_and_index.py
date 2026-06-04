@@ -101,8 +101,10 @@ def main():
         log.warning("청크 없음. parse_pdfs.py → chunk_docs.py 먼저 실행하세요.")
         return
 
-    log.info("임베딩 모델 로드: %s", args.model)
-    model = SentenceTransformer(args.model)
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    log.info("임베딩 모델 로드: %s (device=%s)", args.model, device)
+    model = SentenceTransformer(args.model, device=device)
 
     log.info("Qdrant 연결: %s", args.qdrant_url)
     client = QdrantClient(url=args.qdrant_url)
