@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -191,6 +192,16 @@ class ReviewAgent:
 
     def _save_partial(self, **kwargs) -> None:
         self.partial.update(kwargs)
+
+    def _stage_start(self, key: str) -> float:
+        t = time.time()
+        self.partial.setdefault("timing", {})[key] = {"start": t, "elapsed": None}
+        return t
+
+    def _stage_done(self, key: str, t0: float) -> None:
+        elapsed = time.time() - t0
+        self.partial.setdefault("timing", {})[key] = {"elapsed": round(elapsed, 1)}
+        logger.info("[TIMING] %s=%.1fs", key, elapsed)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -700,11 +711,13 @@ ANALYSIS:
 
         # ── [Vision] 이미지가 있으면 pinmap 추출 ──────────────────────────
         if request.schematic_image_b64:
+            _t0 = self._stage_start("vision")
             csv_from_vision, vision_analysis = self._vision_extract_pinmap(
                 request.schematic_image_b64,
                 request.prompt,
                 chip_hint=request.chip,
             )
+            self._stage_done("vision", _t0)
             self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision)
             # 직접 입력 CSV가 없을 때만 Vision CSV 사용
             if not request.pinmap_csv.strip() and csv_from_vision:
@@ -741,7 +754,9 @@ ANALYSIS:
             raise InterruptedError("cancelled")
 
         logger.info("[STAGE] rule_engine:start")
+        _t0 = self._stage_start("rule_engine")
         rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
+        self._stage_done("rule_engine", _t0)
         logger.info("[STAGE] rule_engine:done errors=%d warnings=%d", len(rule_errors), len(rule_warnings))
         self._save_partial(rule_errors=rule_errors, rule_warnings=rule_warnings)
 
@@ -777,8 +792,10 @@ ANALYSIS:
             raise InterruptedError("cancelled")
 
         logger.info("[STAGE] rag:start query_len=%d", len(rag_query))
+        _t0 = self._stage_start("rag")
         rag_docs = self.rag_query(rag_query, top_k=5)
         rag_context = "\n\n---\n\n".join(rag_docs[:5]) if rag_docs else "(RAG 없음)"
+        self._stage_done("rag", _t0)
         logger.info("[STAGE] rag:done docs=%d", len(rag_docs))
         self._save_partial(rag_docs_count=len(rag_docs), rag_context_preview=rag_context[:500])
 
@@ -787,10 +804,11 @@ ANALYSIS:
             raise InterruptedError("cancelled")
 
         logger.info("[STAGE] llm:start")
+        _t0 = self._stage_start("llm")
         llm_errors, llm_warnings, llm_suggestions = self._llm_validate(
             request, requirements, pinmap_df, rag_context, vision_analysis
         )
-
+        self._stage_done("llm", _t0)
         logger.info("[STAGE] llm:done")
         self._save_partial(llm_errors=llm_errors, llm_warnings=llm_warnings, llm_suggestions=llm_suggestions)
 

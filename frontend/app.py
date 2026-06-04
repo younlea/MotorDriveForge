@@ -121,6 +121,7 @@ for key, default in [
     # 파이프라인 스테이지 (한번 올라간 상태는 내려가지 않음)
     ("_rv_stages", {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}),
     ("_rv_rag_warn", False),
+    ("_rv_partial_timing", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -238,6 +239,16 @@ def _pipeline_status_html() -> str:
     st_ = st.session_state._rv_stages
     rag_warn = st.session_state._rv_rag_warn
 
+    timing = st.session_state.get("_rv_partial_timing", {})
+
+    def _fmt_elapsed(key: str) -> str:
+        t = timing.get(key, {})
+        e = t.get("elapsed")
+        if e is None:
+            return ""
+        m, s = divmod(int(e), 60)
+        return f"{m}:{s:02d}" if m else f"{s:.0f}s"
+
     def _box(label: str, key: str, warn: bool = False) -> str:
         state = st_[key]
         colors = {
@@ -250,12 +261,18 @@ def _pipeline_status_html() -> str:
         if warn and state == "done":
             bg, text, border = "#fff3e0", "#e65100", "#ff9800"
             icon = "⚠️"
+        elapsed_str = _fmt_elapsed(key)
+        time_html = (
+            f'<div style="font-size:10px;color:{text};margin-top:2px">{elapsed_str}</div>'
+            if elapsed_str else ""
+        )
         return (
             f'<div style="background:{bg};border:2px solid {border};border-radius:10px;'
             f'padding:10px 14px;min-width:110px;text-align:center;'
             f'box-shadow:0 1px 4px rgba(0,0,0,.1)">'
             f'<div style="font-size:20px">{icon}</div>'
             f'<div style="font-size:12px;font-weight:bold;color:{text};margin-top:4px">{label}</div>'
+            f'{time_html}'
             f'</div>'
         )
 
@@ -549,6 +566,7 @@ with tab1:
             st.session_state._rv_start = time.time()
             st.session_state._rv_stages = {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}
             st.session_state._rv_rag_warn = False
+            st.session_state["_rv_partial_timing"] = {}
 
             try:
                 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
@@ -581,9 +599,11 @@ with tab1:
         st.markdown("**파이프라인 진행 상태**")
         st.markdown(_pipeline_status_html(), unsafe_allow_html=True)
 
-        # 중간 결과 표시
+        # 중간 결과 + 타이밍 업데이트
         try:
             _pr = requests.get(f"{BACKEND_URL}/v1/review/partial", timeout=3).json()
+            if _pr.get("timing"):
+                st.session_state["_rv_partial_timing"] = _pr["timing"]
             if _pr:
                 with st.expander("중간 결과 (현재까지 완료된 단계)", expanded=True):
                     if _pr.get("vision_analysis"):
