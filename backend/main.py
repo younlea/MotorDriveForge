@@ -277,14 +277,14 @@ def review(
     # 이미지 → base64
     image_b64: Optional[str] = None
     if schematic_image is not None:
-        image_bytes = await schematic_image.read()
+        image_bytes = schematic_image.file.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         logger.info("이미지 수신: %s (%.1f KB)", schematic_image.filename, len(image_bytes) / 1024)
 
     # CSV 소스 결정
     csv_text = ""
     if csv_file is not None:
-        raw_bytes = await csv_file.read()
+        raw_bytes = csv_file.file.read()
         csv_text = raw_bytes.decode("utf-8-sig")
     elif pinmap_csv:
         csv_text = pinmap_csv
