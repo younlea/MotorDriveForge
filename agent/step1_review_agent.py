@@ -83,7 +83,7 @@ class RequirementsDict(BaseModel):
     clock_mhz: int = 170
     crystal_mhz: int = 8
     motor_count: int = 1
-    control_type: str = "FOC"           # FOC | BLDC_6step | PMSM
+    control_type: str = "FOC"           # FOC | BLDC_6step | PMSM | DC(브러시드)
     encoder_type: str = "incremental"   # incremental | hall | sensorless
     encoder_channels: List[str] = Field(default_factory=list)
     pwm_channels: int = 6
@@ -468,11 +468,17 @@ class ReviewAgent:
         if m:
             req.motor_count = int(m.group(1) or m.group(2))
 
-        # --- 제어 방식
-        if "foc" in prompt.lower():
+        # --- 제어 방식 (구체적인 것부터 검사; "bldc"가 "dc"에 오인 매칭되지 않도록 순서 주의)
+        pl = prompt.lower()
+        if "foc" in pl:
             req.control_type = "FOC"
-        elif "6step" in prompt.lower() or "6 step" in prompt.lower():
+        elif "pmsm" in pl:
+            req.control_type = "PMSM"
+        elif "bldc" in pl or "6step" in pl or "6 step" in pl or "6스텝" in prompt:
             req.control_type = "BLDC_6step"
+        elif ("브러시드" in prompt or "brushed" in pl or "dc모터" in pl
+              or "dc 모터" in pl or re.search(r"\bdc\b", pl)):
+            req.control_type = "DC"  # 브러시드 DC — 3상 FOC 아님
 
         # --- 인코더
         if "증분형" in prompt or "incremental" in prompt.lower():
@@ -588,17 +594,23 @@ class ReviewAgent:
         opamp_max = OPAMP_MAX.get(family, 6)
         opamp_funcs = [f for f in functions if "OPAMP" in f and "VOUT" in f]
         opamp_count = len(opamp_funcs)
-        required_opamp = requirements.motor_count * 3 if requirements.current_sense == "internal_opamp" else 0
+        # 3상 제어(FOC/PMSM/BLDC)만 모터당 3채널 전류감지 가정. 브러시드 DC는 해당 없음.
+        three_phase = requirements.control_type in ("FOC", "PMSM", "BLDC_6step")
+        ctrl = requirements.control_type
+        required_opamp = (
+            requirements.motor_count * 3
+            if (requirements.current_sense == "internal_opamp" and three_phase) else 0
+        )
         if required_opamp > opamp_max:
             errors.append(
                 f"OPAMP 초과: {family} 최대 {opamp_max}개, "
-                f"FOC {requirements.motor_count}모터 × 3채널 = {required_opamp}개 필요. "
+                f"{ctrl} {requirements.motor_count}모터 × 3채널 = {required_opamp}개 필요. "
                 "모터 수를 줄이거나 외부 OPAMP로 변경하세요."
             )
         elif required_opamp > 0 and opamp_count < required_opamp:
             warnings.append(
                 f"OPAMP 부족 가능성: 핀맵에 OPAMP_VOUT {opamp_count}개 정의, "
-                f"FOC {requirements.motor_count}모터에는 {required_opamp}개 필요."
+                f"{ctrl} {requirements.motor_count}모터에는 {required_opamp}개 필요."
             )
 
         # 3. BRK 핀 공유 여부
@@ -877,9 +889,15 @@ class ReviewAgent:
             kw_matches = re.findall(r"TIM\w+|OPAMP\w*|DMA|FDCAN\w*|ADC\w*|BRK|AF\d+|BDTR", all_issues)
             keyword_hints = " ".join(set(kw_matches))
 
+        # 제어 방식별 RAG 키워드 (FOC 하드코딩 금지 — DC인데 FOC 문서 끌어오면 안 됨)
+        ctrl_kw = {
+            "FOC": "FOC 3상 PWM TIM1 상보출력 데드타임 OPAMP 전류감지",
+            "PMSM": "PMSM FOC 3상 PWM TIM1 상보출력 OPAMP 전류감지",
+            "BLDC_6step": "BLDC 6-step 사다리꼴 PWM TIM1 홀센서 전류감지",
+            "DC": "브러시드 DC 모터 H-bridge PWM TIM 전류감지",
+        }.get(requirements.control_type, "모터 제어 PWM TIM")
         rag_query = (
-            f"STM32G4 {request.chip} 핀 AF 검증 "
-            f"FOC PWM TIM1 TIM8 OPAMP FDCAN 규칙"
+            f"STM32G4 {request.chip} 핀 AF 검증 {ctrl_kw} 규칙"
         )
         if keyword_hints:
             rag_query += f" {keyword_hints}"
