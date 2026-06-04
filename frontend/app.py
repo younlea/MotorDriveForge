@@ -39,7 +39,9 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
+AUTO_CHIP = "(자동 — 회로도에서 감지)"
 CHIPS = [
+    AUTO_CHIP,
     "STM32G431RBT6",
     "STM32G431RBI6",
     "STM32G474RET6",
@@ -104,6 +106,9 @@ for key, default in [
     ("vision_analysis", ""),
     ("extracted_csv", ""),
     ("pasted_images_b64", []),     # Step1: Ctrl+V로 누적한 회로도 여러 장
+    ("confirm_pinmap_csv", ""),    # Vision 추출 후 사용자 확정 대기 중인 핀맵 CSV
+    ("confirm_chip", ""),          # Vision 감지/입력 칩 (확정 단계 편집용)
+    ("confirm_vision_analysis", ""),
     ("_last_pasted_s1", None),     # 직전에 누적한 붙여넣기 값(중복 append 방지)
     ("chat_history", []),
     ("go_to_step2", False),
@@ -311,6 +316,35 @@ def _run_review_bg(data: dict, files: dict) -> None:
         st.session_state._rv_running = False
 
 
+def _begin_review(data: dict, files: list) -> None:
+    """검증 백그라운드 시작 + 이전 결과/상태 초기화 (직접 CSV 경로·확정 경로 공용)."""
+    st.session_state._rv_running = True
+    st.session_state._rv_result = None
+    st.session_state._rv_error = None
+    st.session_state._rv_cancel = False
+    st.session_state._rv_start = time.time()
+    st.session_state._rv_stages = {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}
+    st.session_state._rv_rag_warn = False
+    st.session_state["_rv_partial_timing"] = {}
+    # 이전 검증 결과/화면 초기화
+    st.session_state.last_report = None
+    st.session_state.review_passed = False
+    st.session_state.validated_pins = {}
+    st.session_state.vision_analysis = ""
+    st.session_state.extracted_csv = ""
+    st.session_state._rv_final_partial = {}
+    st.session_state._rv_final_logs = []
+    st.session_state.chat_history = []
+    try:
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        ctx = get_script_run_ctx()
+        t = threading.Thread(target=_run_review_bg, args=(data, files), daemon=True)
+        add_script_run_ctx(t, ctx)
+    except Exception:
+        t = threading.Thread(target=_run_review_bg, args=(data, files), daemon=True)
+    t.start()
+
+
 with st.sidebar:
     st.title("STM32G4 Agent")
     st.caption("Motor Drive Firmware 자동화")
@@ -379,7 +413,10 @@ with tab1:
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
-        chip = st.selectbox("칩 선택", CHIPS, index=1)
+        chip = st.selectbox(
+            "칩 선택", CHIPS, index=0,
+            help="명시 선택하지 않으면(자동) 회로도 Vision 추출 단계에서 감지된 칩을 확인·수정합니다.",
+        )
 
         st.subheader("입력 방식")
 
@@ -504,16 +541,14 @@ with tab1:
     # 입력 유효성 확인
     has_image = bool(schematic_files) or bool(st.session_state.pasted_images_b64)
     has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
+    in_confirm = bool(st.session_state.confirm_pinmap_csv)  # Vision 추출 후 확정 대기 중
     can_submit = has_image or has_csv
 
     run_disabled = not backend_ok or not can_submit
     if not backend_ok:
         st.warning("Backend 서버에 연결할 수 없습니다. `uvicorn backend.main:app --port 8000` 실행 후 재시도하세요.")
-    elif not can_submit:
+    elif not can_submit and not in_confirm:
         st.info("회로도 이미지 또는 핀맵 CSV를 입력해주세요.")
-
-    if has_image:
-        st.success("회로도 이미지 감지 — Gemma 4 31B Vision이 핀맵을 자동 추출합니다.")
 
     review_mode = st.radio(
         "검증 모드",
@@ -523,19 +558,18 @@ with tab1:
     )
     mode_value = "fast" if "Fast" in review_mode else "full"
 
-    if mode_value == "fast":
-        st.caption("⚡ Fast 모드: Rule Engine만 실행합니다. errors 있으면 즉시 차단 (HTTP 403).")
-    else:
-        st.caption("🔍 Full 모드: Rule Engine + RAG + LLM 전체 실행. errors 있어도 자연어 설명과 함께 결과를 반환합니다.")
+    def _image_files() -> list:
+        """업로드 + 붙여넣기 이미지를 multipart (필드, 파일) 튜플 리스트로."""
+        fs: list = []
+        for _f in (schematic_files or []):
+            _f.seek(0)
+            fs.append(("schematic_images", (_f.name, _f.read(), _f.type or "image/jpeg")))
+        for _i, _pb in enumerate(st.session_state.pasted_images_b64):
+            b64_data = _pb.split(",", 1)[-1]
+            fs.append(("schematic_images", (f"pasted_{_i+1}.png", base64.b64decode(b64_data), "image/png")))
+        return fs
 
-    if has_image and mode_value == "fast":
-        st.info("Fast 모드에서는 이미지 Vision 분석을 건너뜁니다. CSV를 직접 입력해주세요.")
-
-    btn_label = "검증 실행 (Vision + Rule Engine + RAG + LLM)" if (has_image and mode_value == "full") else (
-        "검증 실행 (Rule Engine + RAG + LLM)" if mode_value == "full" else "검증 실행 (Rule Engine only — Fast)"
-    )
-
-    # ── 토글 버튼: 실행 중이면 중단, 아니면 실행 ──────────────────────────
+    # ── 실행 중: 중단 버튼 ───────────────────────────────────────────────
     if st.session_state._rv_running:
         if st.button("⏹ 검증 중단", type="secondary", use_container_width=True, key="btn_stop"):
             st.session_state._rv_cancel = True
@@ -546,63 +580,104 @@ with tab1:
                 pass
             st.warning("검증이 중단되었습니다.")
             st.rerun()
-    else:
-        if st.button(
-            btn_label,
-            type="primary",
-            disabled=run_disabled,
-            use_container_width=True,
-            key="btn_review",
-        ):
+
+    # ── 확정 단계: Vision 추출 핀맵을 검토·수정 후 ② 검증 ────────────────
+    elif in_confirm:
+        st.markdown("### ✅ 추출된 핀맵 검토 · 수정")
+        st.caption("Vision이 회로도에서 추출한 결과입니다. 오인식(예: OSC 핀)을 바로잡고 검증하세요.")
+        st.session_state.confirm_chip = st.text_input(
+            "칩 (Vision 감지값 — 필요시 수정)",
+            value=st.session_state.confirm_chip or "",
+            placeholder="예: STM32G431RBI6",
+        )
+        try:
+            _edit_df = pd.read_csv(StringIO(st.session_state.confirm_pinmap_csv))
+        except Exception:
+            _edit_df = pd.DataFrame(columns=["chip", "pin", "function", "label"])
+        edited_df = st.data_editor(
+            _edit_df, num_rows="dynamic", use_container_width=True, key="pinmap_editor",
+        )
+        st.caption(f"행 {len(edited_df)}개 — 행 추가/삭제/수정 가능")
+        if st.session_state.confirm_vision_analysis:
+            with st.expander("Vision 분석 요약", expanded=False):
+                st.markdown(st.session_state.confirm_vision_analysis[:800])
+
+        col_go, col_cancel = st.columns([3, 1])
+        if col_go.button("② 검증 실행 (확정된 핀맵)", type="primary", use_container_width=True, key="btn_confirm_review"):
+            _chip = (st.session_state.confirm_chip or "").strip()
+            if not _chip:
+                st.error("칩을 입력하세요 (자동 감지 실패 시 직접 입력).")
+                st.stop()
+            _data = {
+                "chip": _chip,
+                "prompt": prompt,
+                "mode": mode_value,
+                "pinmap_csv": edited_df.to_csv(index=False),
+                "vision_analysis": st.session_state.confirm_vision_analysis,
+            }
+            st.session_state.confirm_pinmap_csv = ""  # 확정 단계 종료
+            _begin_review(_data, [])  # 이미지 없이 — Vision 재실행 안 함
+            st.rerun()
+        if col_cancel.button("✖ 취소", use_container_width=True, key="btn_confirm_cancel"):
+            st.session_state.confirm_pinmap_csv = ""
+            st.session_state.confirm_vision_analysis = ""
+            st.rerun()
+
+    # ── 이미지 입력: ① Vision 추출 → 검토 ───────────────────────────────
+    elif has_image:
+        st.success("회로도 이미지 감지 — 먼저 Vision으로 핀맵을 추출해 검토합니다.")
+        if st.button("① Vision으로 핀맵 추출 → 검토", type="primary", disabled=run_disabled,
+                     use_container_width=True, key="btn_extract"):
             if not prompt.strip():
                 st.error("프롬프트를 입력하세요.")
                 st.stop()
+            _ex_data = {"prompt": prompt, "chip": "" if chip == AUTO_CHIP else chip}
+            with st.spinner("Vision으로 핀맵 추출 중... (회로도 장수에 따라 최대 5분)"):
+                try:
+                    _er = requests.post(
+                        f"{BACKEND_URL}/v1/extract-pinmap",
+                        data=_ex_data, files=_image_files(), timeout=600,
+                    )
+                    if _er.status_code == 200:
+                        _res = _er.json()
+                        st.session_state.confirm_pinmap_csv = _res.get("pinmap_csv") or "chip,pin,function,label\n"
+                        st.session_state.confirm_chip = _res.get("chip") or ("" if chip == AUTO_CHIP else chip)
+                        st.session_state.confirm_vision_analysis = _res.get("vision_analysis", "")
+                    else:
+                        st.error(f"Vision 추출 실패 {_er.status_code}: {_er.text[:200]}")
+                except Exception as _e:
+                    st.error(f"Vision 추출 요청 실패: {_e}")
+            st.rerun()
 
-            # multipart/form-data 조립 (bytes로 읽어서 thread에 넘김)
-            # 같은 필드명(schematic_images)에 여러 파일을 보내려면 dict가 아닌 (필드, 파일) 튜플 리스트.
+    # ── 직접 CSV 입력: 바로 검증 ─────────────────────────────────────────
+    else:
+        btn_label = "검증 실행 (Rule Engine + RAG + LLM)" if mode_value == "full" else "검증 실행 (Rule Engine only — Fast)"
+        if st.button(btn_label, type="primary", disabled=run_disabled, use_container_width=True, key="btn_review"):
+            if not prompt.strip():
+                st.error("프롬프트를 입력하세요.")
+                st.stop()
+            # 직접 CSV용 칩: AUTO면 CSV의 chip 컬럼에서 추출
+            _chip = chip
+            if chip == AUTO_CHIP:
+                _chip = ""
+                try:
+                    _src = csv_text if (csv_text and csv_text.strip()) else (csv_file.getvalue().decode("utf-8-sig") if csv_file else "")
+                    _dfc = pd.read_csv(StringIO(_src))
+                    if "chip" in _dfc.columns and len(_dfc):
+                        _chip = str(_dfc["chip"].iloc[0]).strip()
+                except Exception:
+                    pass
+                if not _chip:
+                    st.error("칩을 감지하지 못했습니다. 상단에서 칩을 직접 선택하거나 CSV의 chip 컬럼을 채워주세요.")
+                    st.stop()
             _files: list = []
-            _data: dict = {"chip": chip, "prompt": prompt, "mode": mode_value}
-
-            # 업로드한 여러 장 + 붙여넣기 이미지를 모두 한 설계의 시트로 전송
-            for _f in (schematic_files or []):
-                _f.seek(0)
-                _files.append(("schematic_images", (_f.name, _f.read(), _f.type or "image/jpeg")))
-            for _i, _pb in enumerate(st.session_state.pasted_images_b64):
-                b64_data = _pb.split(",", 1)[-1]
-                _files.append(("schematic_images", (f"pasted_{_i+1}.png", base64.b64decode(b64_data), "image/png")))
-
+            _data: dict = {"chip": _chip, "prompt": prompt, "mode": mode_value}
             if csv_file is not None:
                 csv_file.seek(0)
                 _files.append(("csv_file", (csv_file.name, csv_file.read(), "text/csv")))
             elif csv_text and csv_text.strip():
                 _data["pinmap_csv"] = csv_text
-
-            st.session_state._rv_running = True
-            st.session_state._rv_result = None
-            st.session_state._rv_error = None
-            st.session_state._rv_cancel = False
-            st.session_state._rv_start = time.time()
-            st.session_state._rv_stages = {"vision": "wait", "pinmap": "wait", "rule_engine": "wait", "rag": "wait", "llm": "wait"}
-            st.session_state._rv_rag_warn = False
-            st.session_state["_rv_partial_timing"] = {}
-            # 이전 검증 결과/화면 초기화 — 새 분석 시 옛 리포트·디버그·핀이 남지 않게
-            st.session_state.last_report = None
-            st.session_state.review_passed = False
-            st.session_state.validated_pins = {}
-            st.session_state.vision_analysis = ""
-            st.session_state.extracted_csv = ""
-            st.session_state._rv_final_partial = {}
-            st.session_state._rv_final_logs = []
-            st.session_state.chat_history = []
-
-            try:
-                from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-                ctx = get_script_run_ctx()
-                t = threading.Thread(target=_run_review_bg, args=(_data, _files), daemon=True)
-                add_script_run_ctx(t, ctx)
-            except Exception:
-                t = threading.Thread(target=_run_review_bg, args=(_data, _files), daemon=True)
-            t.start()
+            _begin_review(_data, _files)
             st.rerun()
 
     # ── 진행 중: 원형 프로그레스 + 파이프라인 GUI + 로그 ─────────────────
@@ -908,7 +983,7 @@ with tab2:
 
         st.divider()
         with st.expander("핀맵 직접 입력하여 Step 2 바로 시작", expanded=True):
-            chip2 = st.selectbox("칩 선택", CHIPS, index=1, key="step2_chip")
+            chip2 = st.selectbox("칩 선택", CHIPS[1:], index=2, key="step2_chip")  # AUTO 제외, 기본 G474
 
             # ── 방법 1: 회로도 이미지 붙여넣기 → Vision 추출 ────────────────
             st.markdown("**방법 1 — 회로도 이미지** (Ctrl+V 붙여넣기 → Vision 핀맵 자동 추출)")
@@ -1173,7 +1248,7 @@ with tab3:
         with st.expander("핀맵 직접 입력 (Step 1 없이 진입)", expanded=True):
             _col_chip3, _col_ctrl = st.columns(2)
             with _col_chip3:
-                _chip3 = st.selectbox("칩", CHIPS, index=1, key="s3_chip")
+                _chip3 = st.selectbox("칩", CHIPS[1:], index=2, key="s3_chip")  # AUTO 제외, 기본 G474
             with _col_ctrl:
                 _ctrl3 = st.selectbox("제어 방식", ["FOC", "PMSM", "BLDC_6step", "DC"], key="s3_ctrl")
             _enc3  = st.selectbox("엔코더", ["incremental", "hall", "sensorless"], key="s3_enc")

@@ -63,6 +63,10 @@ class ReviewRequest(BaseModel):
         default_factory=list,
         description="회로도 이미지 base64 목록 (여러 장 = 한 설계의 멀티 시트). 제공 시 Vision 분석 수행.",
     )
+    vision_analysis: str = Field(
+        default="",
+        description="이미 추출한 Vision 분석(확정 단계에서 전달). 있으면 Vision 재실행 생략.",
+    )
     mode: str = Field(
         default="full",
         description="'fast': Rule Engine만 실행 (CI용). 'full': Rule Engine + RAG + LLM (기본).",
@@ -827,6 +831,37 @@ class ReviewAgent:
                 logger.warning("sentence_transformers embed failed: %s", e)
         return [0.0] * 1024
 
+    def extract_pinmap_only(self, request: ReviewRequest) -> Dict[str, str]:
+        """Vision만 실행 — 사용자 확정용 핀맵 추출 (Rule/RAG/LLM 안 함).
+
+        반환: {"chip": 감지/입력 칩, "pinmap_csv": 추출 CSV, "vision_analysis": 요약}
+        칩은 명시 입력값(request.chip)이 있으면 우선, 없으면 추출 CSV에서 감지.
+        """
+        if not request.schematic_images_b64:
+            return {"chip": request.chip, "pinmap_csv": request.pinmap_csv, "vision_analysis": ""}
+
+        logger.info("extract_pinmap_only — sheets=%d", len(request.schematic_images_b64))
+        _t0 = self._stage_start("vision")
+        csv_from_vision, vision_analysis = self._vision_extract_pinmap(
+            request.schematic_images_b64, request.prompt, chip_hint=request.chip,
+        )
+        self._stage_done("vision", _t0)
+        self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision)
+
+        # 칩 결정: 명시 입력이 있으면 그대로, 없으면 CSV 첫 데이터행에서 감지
+        detected_chip = request.chip
+        if not detected_chip:
+            for line in csv_from_vision.splitlines()[1:]:
+                first = line.split(",")[0].strip().upper()
+                if first.startswith("STM32G4"):
+                    detected_chip = first
+                    break
+        return {
+            "chip": detected_chip,
+            "pinmap_csv": csv_from_vision,
+            "vision_analysis": vision_analysis,
+        }
+
     def run(self, request: ReviewRequest) -> ReviewReport:
         """메인 실행 — ReviewRequest → ReviewReport.
 
@@ -838,7 +873,8 @@ class ReviewAgent:
         """
         logger.info("ReviewAgent.run() chip=%s, image_count=%d", request.chip, len(request.schematic_images_b64))
 
-        vision_analysis = ""
+        # 확정 단계에서 전달된 Vision 분석이 있으면 그대로 사용 (이미지 없으면 Vision 재실행 안 함)
+        vision_analysis = request.vision_analysis or ""
 
         # ── [Vision] 이미지가 있으면 pinmap 추출 (여러 장은 한 설계로 종합) ──
         if request.schematic_images_b64:

@@ -291,6 +291,50 @@ async def get_status():
 # POST /v1/review — Step 1: Vision + 핀 검증
 # ---------------------------------------------------------------------------
 
+@app.post("/v1/extract-pinmap", tags=["Step 1"])
+def extract_pinmap(
+    prompt: str = Form("", description="자연어 요구사항 프롬프트 (Vision 보강용, 선택)"),
+    chip: str = Form("", description="칩 힌트 (비우면 회로도에서 자동 감지)"),
+    schematic_images: List[UploadFile] = File(
+        default=[],
+        description="회로도 이미지 (여러 장 = 한 설계의 멀티 시트).",
+    ),
+):
+    """① Vision 핀맵 추출만 수행 (Rule/RAG/LLM 안 함).
+
+    사용자가 추출 결과(칩 + 핀맵 CSV)를 검토·수정한 뒤 /v1/review로 확정 검증하기 위한 단계.
+    Vision OCR 오인식을 사용자가 바로잡을 수 있게 함.
+    반환: {chip, pinmap_csv, vision_analysis}
+    """
+    images_b64: List[str] = []
+    for f in (schematic_images or []):
+        if f is None:
+            continue
+        b = f.file.read()
+        if b:
+            images_b64.append(base64.b64encode(b).decode("utf-8"))
+            logger.info("이미지 수신(extract): %s (%.1f KB)", f.filename, len(b) / 1024)
+    if not images_b64:
+        raise HTTPException(status_code=422, detail="schematic_images(회로도 이미지)가 필요합니다.")
+
+    req = ReviewRequest(
+        chip=chip,
+        prompt=prompt or "회로도에서 핀맵을 추출하세요.",
+        schematic_images_b64=images_b64,
+    )
+    _review_cancel_event.clear()
+    _review_partial.clear()
+    agent = get_agent()
+    agent.cancel_event = _review_cancel_event
+    agent.partial = _review_partial
+    try:
+        result = agent.extract_pinmap_only(req)
+    except Exception as e:
+        logger.exception("extract_pinmap_only 오류")
+        raise HTTPException(status_code=500, detail=f"Vision 추출 오류: {e}")
+    return result
+
+
 @app.post("/v1/review", response_model=ReviewReport, tags=["Step 1"])
 def review(
     chip: str = Form(..., description="예: STM32G474RET6"),
@@ -305,6 +349,7 @@ def review(
     ),
     csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV (선택 — 이미지가 없을 때 필수)"),
     pinmap_csv: Optional[str] = Form(None, description="CSV 문자열 직접 입력 (선택)"),
+    vision_analysis: Optional[str] = Form(None, description="확정 단계에서 전달하는 기존 Vision 분석 (있으면 Vision 재실행 생략)"),
     mode: Literal["fast", "full"] = Form("full", description="fast: Rule Engine만 (CI용). full: 전체 LLM 리뷰 (기본)."),
 ):
     """
@@ -353,6 +398,7 @@ def review(
         pinmap_csv=csv_text,
         prompt=prompt,
         schematic_images_b64=images_b64,
+        vision_analysis=vision_analysis or "",
         mode=mode,
     )
 
