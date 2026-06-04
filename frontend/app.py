@@ -109,6 +109,7 @@ for key, default in [
     ("confirm_pinmap_csv", ""),    # Vision 추출 후 사용자 확정 대기 중인 핀맵 CSV
     ("confirm_chip", ""),          # Vision 감지/입력 칩 (확정 단계 편집용)
     ("confirm_vision_analysis", ""),
+    ("confirm_peripherals", ""),   # Vision 추출 외부 부품/연결 (확정 단계 편집용)
     ("_last_pasted_s1", None),     # 직전에 누적한 붙여넣기 값(중복 append 방지)
     ("chat_history", []),
     ("go_to_step2", False),
@@ -598,6 +599,17 @@ with tab1:
             _edit_df, num_rows="dynamic", use_container_width=True, key="pinmap_editor",
         )
         st.caption(f"행 {len(edited_df)}개 — 행 추가/삭제/수정 가능")
+
+        st.markdown("**연결된 페리페럴 / 외부 부품** (Vision 추출 — 수정 가능)")
+        st.session_state.confirm_peripherals = st.text_area(
+            "페리페럴",
+            value=st.session_state.confirm_peripherals or "",
+            height=160,
+            label_visibility="collapsed",
+            help="게이트 드라이버·전류 감지·보호·커넥터·전원 등. LLM이 핀맵과 함께 검토합니다. 비워도 됩니다.",
+            placeholder="- 게이트 드라이버: ...\n- 전류 감지: ...\n- 보호: ...\n- 전원: ...",
+        )
+
         if st.session_state.confirm_vision_analysis:
             with st.expander("Vision 분석 요약", expanded=False):
                 st.markdown(st.session_state.confirm_vision_analysis[:800])
@@ -614,6 +626,7 @@ with tab1:
                 "mode": mode_value,
                 "pinmap_csv": edited_df.to_csv(index=False),
                 "vision_analysis": st.session_state.confirm_vision_analysis,
+                "peripherals": st.session_state.confirm_peripherals or "",
             }
             st.session_state.confirm_pinmap_csv = ""  # 확정 단계 종료
             _begin_review(_data, [])  # 이미지 없이 — Vision 재실행 안 함
@@ -621,6 +634,7 @@ with tab1:
         if col_cancel.button("✖ 취소", use_container_width=True, key="btn_confirm_cancel"):
             st.session_state.confirm_pinmap_csv = ""
             st.session_state.confirm_vision_analysis = ""
+            st.session_state.confirm_peripherals = ""
             st.rerun()
 
     # ── 이미지 입력: ① Vision 추출 → 검토 ───────────────────────────────
@@ -643,6 +657,7 @@ with tab1:
                         st.session_state.confirm_pinmap_csv = _res.get("pinmap_csv") or "chip,pin,function,label\n"
                         st.session_state.confirm_chip = _res.get("chip") or ("" if chip == AUTO_CHIP else chip)
                         st.session_state.confirm_vision_analysis = _res.get("vision_analysis", "")
+                        st.session_state.confirm_peripherals = _res.get("peripherals", "")
                     else:
                         st.error(f"Vision 추출 실패 {_er.status_code}: {_er.text[:200]}")
                 except Exception as _e:
@@ -857,6 +872,10 @@ with tab1:
             if fp.get("extracted_csv"):
                 with st.expander("②′ Vision 추출 원본 CSV", expanded=False):
                     st.code(fp["extracted_csv"], language="text")
+
+            if fp.get("peripherals"):
+                with st.expander("②″ 페리페럴/외부 부품 (Vision 추출)", expanded=False):
+                    st.markdown(fp["peripherals"])
 
             if "rule_errors" in fp or "rule_warnings" in fp:
                 _errs = fp.get("rule_errors", [])

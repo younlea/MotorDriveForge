@@ -350,6 +350,7 @@ def review(
     csv_file: Optional[UploadFile] = File(None, description="핀맵 CSV (선택 — 이미지가 없을 때 필수)"),
     pinmap_csv: Optional[str] = Form(None, description="CSV 문자열 직접 입력 (선택)"),
     vision_analysis: Optional[str] = Form(None, description="확정 단계에서 전달하는 기존 Vision 분석 (있으면 Vision 재실행 생략)"),
+    peripherals: Optional[str] = Form(None, description="외부 부품/연결 설명 (확정 단계에서 전달, LLM 페리페럴 검토용)"),
     mode: Literal["fast", "full"] = Form("full", description="fast: Rule Engine만 (CI용). full: 전체 LLM 리뷰 (기본)."),
 ):
     """
@@ -399,6 +400,7 @@ def review(
         prompt=prompt,
         schematic_images_b64=images_b64,
         vision_analysis=vision_analysis or "",
+        peripherals=peripherals or "",
         mode=mode,
     )
 

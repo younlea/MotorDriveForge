@@ -67,6 +67,10 @@ class ReviewRequest(BaseModel):
         default="",
         description="이미 추출한 Vision 분석(확정 단계에서 전달). 있으면 Vision 재실행 생략.",
     )
+    peripherals: str = Field(
+        default="",
+        description="외부 부품/연결 설명(게이트드라이버·전류감지·보호·커넥터·전원). LLM 페리페럴 검토에 사용.",
+    )
     mode: str = Field(
         default="full",
         description="'fast': Rule Engine만 실행 (CI용). 'full': Rule Engine + RAG + LLM (기본).",
@@ -377,12 +381,13 @@ class ReviewAgent:
 
     def _vision_extract_pinmap(
         self, images_b64: List[str], prompt: str, chip_hint: str = ""
-    ) -> Tuple[str, str]:
-        """Gemma 4 31B 멀티모달로 회로도 이미지(1장 이상) → (pinmap_csv, vision_analysis).
+    ) -> Tuple[str, str, str]:
+        """Gemma 4 31B 멀티모달로 회로도 이미지(1장 이상) → (pinmap_csv, vision_analysis, peripherals).
 
         여러 장은 한 설계의 여러 시트로 보고 하나의 통합 핀맵으로 추출.
         pinmap_csv: chip,pin,function,label 형식 CSV 문자열
         vision_analysis: 이미지에서 추출한 초기 분석 텍스트 (한국어)
+        peripherals: 외부 부품/연결(게이트드라이버·전류감지·보호·커넥터·전원) 사실 나열 (LLM 검토용)
         """
         multi = len(images_b64) > 1
         multi_note = (
@@ -402,6 +407,16 @@ class ReviewAgent:
             "chip,pin,function,label\n"
             "<chip>,<pin>,<function>,<label>\n"
             "... (all visible pins across all sheets)\n\n"
+            "PERIPHERALS:\n"
+            "<External parts and their STM32 connections — FACTS ONLY, no analysis/problems. "
+            "One per line, e.g.:\n"
+            "- Gate driver: <part or type> — PWM inputs from STM32 <pins>, fault/enable on <pins>\n"
+            "- Power stage: <MOSFET/IPM type>, phases U/V/W\n"
+            "- Current sense: <shunt/hall>, <count> ch -> STM32 <OPAMP/ADC pins>\n"
+            "- Protection: <OCP/OVP/UVLO/fuse/TVS> if visible\n"
+            "- Connector: <purpose and key signals>\n"
+            "- Power: <rails/regulators, e.g. 24V->5V->3V3>\n"
+            "Only list what is visible. If a category is absent, omit it.>\n\n"
             "SUMMARY:\n"
             "<2-3 sentences: key peripherals used (e.g. TIM1 6-ch complementary PWM, OPAMP current sense, FDCAN). "
             "No analysis or problem identification — that is done in a later stage.>\n\n"
@@ -419,15 +434,15 @@ class ReviewAgent:
 
         if not raw or len(raw.strip()) < 30:
             logger.warning("Vision extraction 응답 없음 또는 너무 짧음 (len=%d)", len(raw or ""))
-            return "", ""
+            return "", "", ""
 
         # CHIP 파싱
         chip_match = re.search(r"CHIP:\s*(STM32G\w+)", raw, re.IGNORECASE)
         extracted_chip = chip_match.group(1).upper() if chip_match else chip_hint
 
-        # CSV 섹션 추출 — 가변 줄바꿈 허용, 대소문자 무관
+        # CSV 섹션 추출 — 가변 줄바꿈 허용, 대소문자 무관 (PERIPHERALS/SUMMARY 앞에서 멈춤)
         csv_match = re.search(
-            r"CSV:?\s*\n(.*?)(?:\n+(?:SUMMARY|ANALYSIS):|\Z)",
+            r"CSV:?\s*\n(.*?)(?:\n+(?:PERIPHERALS|SUMMARY|ANALYSIS):|\Z)",
             raw, re.DOTALL | re.IGNORECASE,
         )
         pinmap_csv = ""
@@ -448,16 +463,24 @@ class ReviewAgent:
             else:
                 pinmap_csv = csv_block
 
+        # PERIPHERALS 섹션 추출 (외부 부품/연결 — LLM 검토용)
+        periph_match = re.search(
+            r"PERIPHERALS:\s*\n(.*?)(?:\n+(?:SUMMARY|ANALYSIS):|\Z)",
+            raw, re.DOTALL | re.IGNORECASE,
+        )
+        peripherals = periph_match.group(1).strip() if periph_match else ""
+
         # SUMMARY(또는 구버전 ANALYSIS) 섹션 추출
         analysis_match = re.search(r"(?:SUMMARY|ANALYSIS):\s*\n(.*)", raw, re.DOTALL)
         vision_analysis = analysis_match.group(1).strip() if analysis_match else raw[:300]
 
         logger.info(
-            "Vision extraction 완료 — chip=%s, csv_lines=%d",
+            "Vision extraction 완료 — chip=%s, csv_lines=%d, periph=%d자",
             extracted_chip,
             len(pinmap_csv.splitlines()),
+            len(peripherals),
         )
-        return pinmap_csv, vision_analysis
+        return pinmap_csv, vision_analysis, peripherals
 
     # ------------------------------------------------------------------
     # Public interface
@@ -838,15 +861,15 @@ class ReviewAgent:
         칩은 명시 입력값(request.chip)이 있으면 우선, 없으면 추출 CSV에서 감지.
         """
         if not request.schematic_images_b64:
-            return {"chip": request.chip, "pinmap_csv": request.pinmap_csv, "vision_analysis": ""}
+            return {"chip": request.chip, "pinmap_csv": request.pinmap_csv, "vision_analysis": "", "peripherals": ""}
 
         logger.info("extract_pinmap_only — sheets=%d", len(request.schematic_images_b64))
         _t0 = self._stage_start("vision")
-        csv_from_vision, vision_analysis = self._vision_extract_pinmap(
+        csv_from_vision, vision_analysis, peripherals = self._vision_extract_pinmap(
             request.schematic_images_b64, request.prompt, chip_hint=request.chip,
         )
         self._stage_done("vision", _t0)
-        self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision)
+        self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision, peripherals=peripherals)
 
         # 칩 결정: 명시 입력이 있으면 그대로, 없으면 CSV 첫 데이터행에서 감지
         detected_chip = request.chip
@@ -860,6 +883,7 @@ class ReviewAgent:
             "chip": detected_chip,
             "pinmap_csv": csv_from_vision,
             "vision_analysis": vision_analysis,
+            "peripherals": peripherals,
         }
 
     def run(self, request: ReviewRequest) -> ReviewReport:
@@ -873,19 +897,20 @@ class ReviewAgent:
         """
         logger.info("ReviewAgent.run() chip=%s, image_count=%d", request.chip, len(request.schematic_images_b64))
 
-        # 확정 단계에서 전달된 Vision 분석이 있으면 그대로 사용 (이미지 없으면 Vision 재실행 안 함)
+        # 확정 단계에서 전달된 Vision 분석/페리페럴이 있으면 그대로 사용 (이미지 없으면 Vision 재실행 안 함)
         vision_analysis = request.vision_analysis or ""
+        peripherals = request.peripherals or ""
 
         # ── [Vision] 이미지가 있으면 pinmap 추출 (여러 장은 한 설계로 종합) ──
         if request.schematic_images_b64:
             _t0 = self._stage_start("vision")
-            csv_from_vision, vision_analysis = self._vision_extract_pinmap(
+            csv_from_vision, vision_analysis, peripherals = self._vision_extract_pinmap(
                 request.schematic_images_b64,
                 request.prompt,
                 chip_hint=request.chip,
             )
             self._stage_done("vision", _t0)
-            self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision)
+            self._save_partial(vision_analysis=vision_analysis, extracted_csv=csv_from_vision, peripherals=peripherals)
             # 직접 입력 CSV가 없을 때만 Vision CSV 사용
             if not request.pinmap_csv.strip() and csv_from_vision:
                 request.pinmap_csv = csv_from_vision
@@ -989,7 +1014,7 @@ class ReviewAgent:
         logger.info("[STAGE] llm:start")
         _t0 = self._stage_start("llm")
         llm_errors, llm_warnings, llm_suggestions = self._llm_validate(
-            request, requirements, pinmap_df, rag_context, vision_analysis
+            request, requirements, pinmap_df, rag_context, vision_analysis, peripherals
         )
         self._stage_done("llm", _t0)
         logger.info("[STAGE] llm:done")
@@ -1018,40 +1043,52 @@ class ReviewAgent:
         pinmap_df: pd.DataFrame,
         rag_context: str,
         vision_analysis: str = "",
+        peripherals: str = "",
     ) -> Tuple[List[str], List[str], List[str]]:
-        """LLM 핀 검증 — errors, warnings, suggestions 반환."""
+        """LLM 검증 — STM32 핀맵 + 외부 페리페럴(게이트드라이버·전류감지·보호·전원) 종합.
+        errors, warnings, suggestions 반환."""
         model = self._available_model()
 
-        system = """You are an expert STM32G4 hardware validation engineer.
-Analyze the provided pinmap CSV and requirements, then output ONLY a JSON object with:
+        system = """You are an expert STM32G4 motor-drive hardware reviewer.
+Review BOTH the STM32 pin assignments AND the connected peripherals (gate driver, power stage,
+current sensing, protection, connectors, power supply). Output ONLY a JSON object with:
 {
   "errors": ["..."],
   "warnings": ["..."],
   "suggestions": ["..."]
 }
+Cover, where the data allows:
+- MCU side: AF/pin conflicts, timer/ADC/DMA, complementary PWM + dead-time, clock.
+- Power/EMI: gate driver bootstrap/supply, decoupling, current-sense resistor/OPAMP path, GND.
+- Safety/Failsafe: brake/BKIN, OCP/OVP/UVLO, watchdog, fault feedback to MCU.
 Rules:
-- errors: critical issues that BLOCK firmware generation (wrong AF, pin conflict, resource exceeded)
-- warnings: non-critical issues the developer should review
-- suggestions: optimization recommendations
-- Write in Korean.
-- Be specific: include pin names and peripheral names.
-- Do not repeat issues already listed in the rule engine output."""
+- errors: critical issues that BLOCK firmware generation or are unsafe.
+- warnings: issues the developer should review.
+- suggestions: optimization/best-practice recommendations.
+- Write in Korean. Be specific: name the pin/peripheral/component.
+- Base peripheral findings on the PERIPHERALS section; if info is missing, ask via a suggestion
+  rather than inventing components. Do not repeat rule-engine issues."""
 
         vision_section = ""
         if vision_analysis:
-            vision_section = f"\nVision 초기 분석 (이미지에서 추출):\n{vision_analysis}\n"
+            vision_section = f"\nVision 초기 분석:\n{vision_analysis}\n"
+        periph_section = (
+            f"\n연결된 페리페럴/외부 부품 (사용자 확정):\n{peripherals}\n"
+            if peripherals.strip() else
+            "\n연결된 페리페럴 정보 없음 — 페리페럴 관련은 추정 금지, 필요한 정보를 suggestion으로 질문할 것.\n"
+        )
 
         user = f"""Chip: {request.chip}
 Requirements (parsed):
 {requirements.model_dump_json(indent=2)}
-{vision_section}
+{vision_section}{periph_section}
 Pinmap CSV:
 {pinmap_df.to_csv(index=False)}
 
 Reference documents (RAG):
 {rag_context}
 
-Validate the pinmap and return JSON."""
+Review the MCU pinmap AND the peripherals, then return JSON."""
 
         raw = self._ollama_generate(system, user, model)  # think=False (기본) — JSON 안정 출력
         if not raw:
