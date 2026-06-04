@@ -41,6 +41,7 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 CHIPS = [
     "STM32G431RBT6",
+    "STM32G431RBI6",
     "STM32G474RET6",
     "STM32G491RET6",
     "STM32G484RET6",
