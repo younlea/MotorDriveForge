@@ -11,8 +11,15 @@
 import argparse
 import json
 import logging
+import os
+import ssl
 import uuid
 from pathlib import Path
+
+# 오프라인/기업망 환경: 자체 서명 인증서 우회
+os.environ.setdefault("CURL_CA_BUNDLE", "")
+os.environ.setdefault("REQUESTS_CA_BUNDLE", "")
+ssl._create_default_https_context = ssl._create_unverified_context  # noqa: SLF001
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
