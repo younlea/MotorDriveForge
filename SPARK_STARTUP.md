@@ -232,3 +232,43 @@ streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 | RAG 결과 없음 | embed_and_index.py 미실행 | Step 3 재실행 |
 | `gemma4-fast not found` | 모델 미등록 | `ollama create gemma4-fast:latest -f /workspace/Modelfile` (베이스 `gemma4:31b` 필요 시 `ollama pull gemma4:31b`) |
 | pin_af_db 경고 | XML 없이 폴백 사용 중 | X-CUBE-MCSDK 설치 후 Step 4 재실행 |
+| 컨텍스트 부족(긴 RAG/대화 truncation 의심) | gemma4-fast num_ctx가 작음 | 아래 "gemma4-fast 컨텍스트(num_ctx) 변경" 참조 |
+
+---
+
+## gemma4-fast 컨텍스트(num_ctx) 변경 — 자주 찾는 절차
+
+MotorDriveForge와 open-webui는 **같은 `gemma4-fast` 모델 인스턴스를 공유**합니다.
+앱은 요청에 num_ctx를 싣지 않으므로, **컨텍스트 크기는 오직 `/workspace/Modelfile`에서만** 정해집니다.
+즉 컨텍스트를 늘리거나 줄이려면 아래 한 곳만 바꾸면 되고, **앱 재배포는 불필요**합니다.
+
+```bash
+# 1) Modelfile 수정 — num_ctx 값만 원하는 크기로
+cat > /workspace/Modelfile <<'EOF'
+FROM gemma4:31b
+PARAMETER num_ctx 65536
+EOF
+#    (32768=32K, 65536=64K, 131072=128K ... 원하는 값)
+
+# 2) 모델 재등록 (가중치는 캐시 재사용 → 수 초)
+ollama create gemma4-fast:latest -f /workspace/Modelfile
+
+# 3) 기존에 떠 있던 인스턴스를 내려서 새 컨텍스트로 다시 로드되게
+ollama stop gemma4-fast:latest
+
+# 4) 다음 요청(리뷰 1회 또는 webui 사용) 후 확인
+ollama ps      # CONTEXT 열이 새 값으로 바뀌었는지
+```
+
+### num_ctx ↔ 메모리(대략, gemma4-fast = gemma4:31b Q4_K_M 기준)
+
+| num_ctx | 메모리 | 비고 |
+|---|---|---|
+| 8K (8192) | ~25GB | Vision 이미지(~5천 토큰)+RAG엔 빠듯 |
+| 32K (32768) | ~27GB | 기본 권장 — 실사용(~1만 토큰)의 3배 |
+| 64K (65536) | ~30GB | 여유 충분, 긴 대화에도 안전 |
+| 256K (기본 자동) | ~47GB | 과도 — 단일 iGPU에서 다른 모델 evict 유발 |
+
+> - 컨텍스트는 **클수록 KV 캐시로 메모리만 더 쓸 뿐 품질엔 영향 없음**. 우리가 실제로 넣는 토큰만큼만 쓰면 됨.
+> - 이 변경은 **webui 사용자에게도 동일 적용**됩니다(같은 인스턴스 공유) — 컨텍스트가 늘어 이득이며 손해 없음.
+> - 변경 후 `OLLAMA_HOST=0.0.0.0`는 그대로 유지되어야 함(컨테이너 접속용, `/workspace/ollama_launch.sh`).
