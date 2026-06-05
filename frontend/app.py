@@ -625,6 +625,16 @@ with tab1:
         _opts = _fetch_pin_options(_chip_now)
         _pin_opts = _opts.get("pins", {})
         _common = _opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
+        _io_map = _opts.get("io", {})
+
+        def _io_badge(pin: str) -> str:
+            """I/O structure 배지 — FT(5V)=초록, TT(3.6V)=주황."""
+            code = _io_map.get(pin, "")
+            if code.startswith("FT"):
+                return ":green[**FT**] 5V"
+            if code.startswith("TT"):
+                return ":orange[**TT**] 3V3"
+            return ":gray[—]"
 
         def _clean(v):
             v = "" if v is None else str(v).strip()
@@ -636,8 +646,9 @@ with tab1:
             st.warning(f"이 칩({_opts.get('mcu_name') or _chip_now or '?'})의 AF 옵션을 "
                        "못 찾았습니다. 칩 부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
 
-        _hc = st.columns([1, 1.6, 2.6])
-        _hc[0].markdown("**핀**"); _hc[1].markdown("**라벨**"); _hc[2].markdown("**function**")
+        _hc = st.columns([0.9, 1, 1.6, 2.6])
+        _hc[0].markdown("**IO**"); _hc[1].markdown("**핀**")
+        _hc[2].markdown("**라벨**"); _hc[3].markdown("**function**")
         _rows = []
         for _, _row in _base_df.iterrows():
             pin = _clean(_row.get("pin")).upper()
@@ -645,7 +656,8 @@ with tab1:
                 continue
             cur = _clean(_row.get("function"))
             choices = _fn_choices(pin, cur, _pin_opts, _common)
-            c1, c2, c3 = st.columns([1, 1.6, 2.6])
+            c0, c1, c2, c3 = st.columns([0.9, 1, 1.6, 2.6])
+            c0.markdown(_io_badge(pin))
             c1.markdown(f"`{pin}`")
             _lbl = c2.text_input("l", value=_clean(_row.get("label")),
                                  key=f"clbl_{_chip_now}_{pin}", label_visibility="collapsed")

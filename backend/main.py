@@ -504,6 +504,23 @@ def _load_pin_options(family: str) -> Dict[str, Any]:
     return _pin_options_cache[family]
 
 
+# 핀별 I/O structure(FT=5V내성 / TT=3.6V) — 데이터시트에서 파생(scripts/parse_datasheet_io.py).
+# CubeMX DB엔 없는 정보라 별도. 패드 속성이라 패밀리 단위로 둔다.
+_PIN_IO_PATH = Path(__file__).resolve().parent.parent / "agent" / "pin_io_structure.json"
+_pin_io_cache: Optional[Dict[str, Any]] = None
+
+
+def _load_pin_io(family: str) -> Dict[str, str]:
+    global _pin_io_cache
+    if _pin_io_cache is None:
+        try:
+            _pin_io_cache = json.loads(_PIN_IO_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("pin_io_structure.json 로드 실패: %s", e)
+            _pin_io_cache = {}
+    return _pin_io_cache.get(f"STM32{family}", {})
+
+
 @app.get("/v1/pin-options/{chip}", tags=["Step 2"])
 async def pin_options(chip: str):
     """칩 부품번호 → 핀별 선택 가능한 CubeMX 신호 목록(드롭다운 소스).
@@ -521,6 +538,8 @@ async def pin_options(chip: str):
         "pins": entry.get("pins", {}),
         # GPIO/아날로그는 Signal이 아니라 Mode로 설정되지만, 드롭다운 편의를 위해 제공
         "common": ["GPIO_Output", "GPIO_Input", "GPIO_Analog"],
+        # 핀별 I/O structure (FT=5V내성 / TT=3.6V). 데이터시트 파생.
+        "io": _load_pin_io(family),
     }
 
 
