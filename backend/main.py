@@ -510,7 +510,9 @@ _PIN_IO_PATH = Path(__file__).resolve().parent.parent / "agent" / "pin_io_struct
 _pin_io_cache: Optional[Dict[str, Any]] = None
 
 
-def _load_pin_io(family: str) -> Dict[str, str]:
+def _load_pin_io(mcu_name: str) -> Dict[str, str]:
+    """mcu_name(예: STM32G431R(6-8-B)Ix) → 핀 I/O structure 맵.
+    서브패밀리(STM32G431) 우선, 없으면 패밀리(STM32G4) 폴백."""
     global _pin_io_cache
     if _pin_io_cache is None:
         try:
@@ -518,7 +520,7 @@ def _load_pin_io(family: str) -> Dict[str, str]:
         except Exception as e:
             logger.warning("pin_io_structure.json 로드 실패: %s", e)
             _pin_io_cache = {}
-    return _pin_io_cache.get(f"STM32{family}", {})
+    return _pin_io_cache.get(mcu_name[:9]) or _pin_io_cache.get(mcu_name[:7]) or {}
 
 
 @app.get("/v1/pin-options/{chip}", tags=["Step 2"])
@@ -538,8 +540,8 @@ async def pin_options(chip: str):
         "pins": entry.get("pins", {}),
         # GPIO/아날로그는 Signal이 아니라 Mode로 설정되지만, 드롭다운 편의를 위해 제공
         "common": ["GPIO_Output", "GPIO_Input", "GPIO_Analog"],
-        # 핀별 I/O structure (FT=5V내성 / TT=3.6V). 데이터시트 파생.
-        "io": _load_pin_io(family),
+        # 핀별 I/O structure (FT=5V내성 / TT=3.6V). 데이터시트 파생. 서브패밀리 우선.
+        "io": _load_pin_io(ident["name"]),
     }
 
 
