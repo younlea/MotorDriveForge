@@ -216,6 +216,16 @@ FIXED_FUNCTION_PINS: Dict[str, str] = {
     "SWDIO": "PA13", "SWCLK": "PA14",               # SWD 디버그
 }
 
+# JTAG 전용 핀(JTDO/NJTRST/JTDI) — 리셋 직후 기본 AF가 JTAG이지만, SWD(PA13/PA14)와는
+# 독립적이다. 거의 모든 보드가 SWD만 쓰므로 Debug=Serial Wire로 두면 자유롭게 다른 AF로
+# 재사용 가능. 따라서 다른 기능에 배정돼도 ERROR가 아니라 WARNING이며, Step 2(.ioc 생성)에서
+# Debug=Serial Wire + 해당 AF 설정으로 결정론적으로 해결된다.
+JTAG_ONLY_PINS: Dict[str, str] = {
+    "PB3":  "JTDO",
+    "PB4":  "NJTRST",
+    "PA15": "JTDI",
+}
+
 # gemma4-fast = gemma4:31b 가중치 + Modelfile의 num_ctx(=웹UI와 공유하는 컨텍스트).
 # webui와 같은 모델을 써서 단일 runner를 공유 → evict/콜드로드 원천 차단. 품질은 31b와 동일.
 GEMMA4_VISION_MODEL = "gemma4-fast:latest"
@@ -772,6 +782,23 @@ class ReviewAgent:
                         f"회로도 재확인 필요(특히 Vision 추출 오인식 — 예: PA11/PA13은 OSC 핀이 아님)."
                     )
 
+        # 11. JTAG 전용 핀(JTDO/NJTRST/JTDI) 재사용 — config로 해결되므로 WARNING (ERROR 아님)
+        if "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
+            for _, row in pinmap_df.iterrows():
+                pin = str(row["pin"]).upper().strip()
+                func = str(row["function"]).upper().strip()
+                default_jtag = JTAG_ONLY_PINS.get(pin)
+                if not default_jtag:
+                    continue
+                # 기능 미지정(GPIO/빈칸) 또는 원래 JTAG 기능 그대로면 문제 없음
+                if func in ("", "NAN", "NONE", "GPIO", default_jtag):
+                    continue
+                warnings.append(
+                    f"JTAG 핀 재사용: {pin}는 리셋 기본값이 JTAG 전용({default_jtag})이나 {func}에 배정됨. "
+                    f"SWD 디버깅(PA13/PA14)은 영향 없음 — Step 2에서 Debug=Serial Wire + AF 설정으로 "
+                    f"해결되므로 오류가 아닌 검토 항목입니다."
+                )
+
         return errors, warnings
 
     def rag_query(self, query_text: str, top_k: int = 5) -> List[str]:
@@ -1134,8 +1161,13 @@ Cover, where the data allows:
 - Power/EMI: gate driver bootstrap/supply, decoupling, current-sense resistor/OPAMP path, GND.
 - Safety/Failsafe: brake/BKIN, OCP/OVP/UVLO, watchdog, fault feedback to MCU.
 Rules:
-- errors: critical issues that BLOCK firmware generation or are unsafe.
-- warnings: issues the developer should review.
+- errors: ONLY truly unresolvable or unsafe issues — an AF that does not exist on the pin,
+  a hard pin conflict (two functions physically need the same pin), or a safety violation.
+- warnings: issues resolvable purely by CubeMX configuration in Step 2 (AF assignment,
+  debug-pin remap such as JTDO/NJTRST/JTDI on PB3/PB4/PA15 when only SWD is used,
+  enabling a peripheral clock), plus anything the developer should review.
+  Do NOT escalate a config-fixable item to errors — if it can be fixed by a CubeMX setting
+  without changing the schematic, it is a warning.
 - suggestions: optimization/best-practice recommendations.
 - Write in Korean. Be specific: name the pin/peripheral/component.
 - Base peripheral findings on the PERIPHERALS section; if info is missing, ask via a suggestion
