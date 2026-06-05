@@ -180,6 +180,32 @@ OPAMP_MAX: Dict[str, int] = {
 }
 DMA_CH_MAX = 16
 
+# Signal label → HAL function 추론 테이블.
+# Vision이 label(신호이름)만 읽을 때, Rule Engine이 결정론적으로 function을 채워 검증에 활용.
+# 키: 대문자 부분매칭 패턴, 값: 채울 STM32 HAL function (확실한 것만 — 애매하면 제외).
+LABEL_TO_FUNCTION: List[tuple] = [
+    # CAN / FDCAN
+    ("CAN_TX", "FDCAN1_TX"), ("CAN_RX", "FDCAN1_RX"),
+    ("CANTX", "FDCAN1_TX"),  ("CANRX", "FDCAN1_RX"),
+    ("FDCAN_TX", "FDCAN1_TX"), ("FDCAN_RX", "FDCAN1_RX"),
+    # SPI
+    ("SPI_SCK", "SPI1_SCK"), ("SPI SCK", "SPI1_SCK"),
+    ("SPI_MISO", "SPI1_MISO"), ("SPI MISO", "SPI1_MISO"),
+    ("SPI_MOSI", "SPI1_MOSI"), ("SPI MOSI", "SPI1_MOSI"),
+    ("SPI_NSS", "SPI1_NSS"),   ("SPI NSS", "SPI1_NSS"),
+    # UART / USART
+    ("UART_TX", "USART1_TX"), ("UART TX", "USART1_TX"),
+    ("UART_RX", "USART1_RX"), ("UART RX", "USART1_RX"),
+    # I2C
+    ("I2C_SCL", "I2C1_SCL"), ("I2C_SDA", "I2C1_SDA"),
+    # SWD — 고정핀이지만 명시적으로 두기
+    ("SWDIO", "SWDIO"), ("SWCLK", "SWCLK"),
+    # OSC
+    ("HSE_IN", "RCC_OSC_IN"),  ("XTAL_IN", "RCC_OSC_IN"),
+    ("HSE_OUT", "RCC_OSC_OUT"), ("XTAL_OUT", "RCC_OSC_OUT"),
+    ("LSE_IN", "RCC_OSC32_IN"), ("LSE_OUT", "RCC_OSC32_OUT"),
+]
+
 # STM32G4 다이 고정 특수기능 핀 (패키지 무관). 회로도/Vision 오인식 검출용 — 결정론 검증.
 # 예) OSC_IN은 PF0 고정이라 PA11 같은 곳에 있을 수 없음.
 FIXED_FUNCTION_PINS: Dict[str, str] = {
@@ -958,6 +984,30 @@ class ReviewAgent:
                 errors=[f"CSV 파싱 오류: {e}"],
                 vision_analysis=vision_analysis,
             )
+
+        # ── label → function 자동 채움 ────────────────────────────────────
+        # Vision이 function을 비워두고 label(신호이름)만 읽은 경우, LABEL_TO_FUNCTION
+        # 테이블로 결정론적으로 채워 Rule Engine 검증에 활용 (환각 없음).
+        if "function" in pinmap_df.columns and "label" in pinmap_df.columns:
+            def _infer_function(func: str, label: str) -> str:
+                if func and func.upper() not in ("", "NAN", "NONE"):
+                    return func  # 이미 채워져 있으면 그대로
+                lb = str(label).upper()
+                for pattern, hal in LABEL_TO_FUNCTION:
+                    if pattern.upper() in lb:
+                        return hal
+                return func
+            pinmap_df = pinmap_df.copy()
+            pinmap_df["function"] = pinmap_df.apply(
+                lambda r: _infer_function(
+                    str(r.get("function", "")) if not pd.isna(r.get("function", None)) else "",
+                    str(r.get("label", "")) if not pd.isna(r.get("label", None)) else "",
+                ),
+                axis=1,
+            )
+            inferred = (pinmap_df["function"] != "").sum()
+            if inferred:
+                logger.info("label→function 자동 채움: %d핀", inferred)
 
         # ── [A] 요구사항 파싱 + Rule Engine ───────────────────────────────
         requirements = self.parse_prompt(request.prompt)
