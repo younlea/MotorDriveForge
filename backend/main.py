@@ -886,6 +886,109 @@ def _peripheral_of(func: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# TIM 메인 채널/ETR은 .ioc의 핀 Signal에서 S_ 접두가 붙는다 (S_TIM1_CH1).
+# 상보채널(CHxN)·BKIN·다른 페리페럴은 그대로.
+_TIM_MAIN_SIG = re.compile(r"^TIM\d+_(CH\d+|ETR)$")
+
+
+def _pin_signal_value(sig: str) -> str:
+    return f"S_{sig}" if _TIM_MAIN_SIG.match(sig.upper()) else sig
+
+
+def _esc_key(k: str) -> str:
+    """Java Properties 키 이스케이프 — 공백→'\\ ', '#'→'\\#'."""
+    return k.replace("#", "\\#").replace(" ", "\\ ")
+
+
+def _esc_val(v: str) -> str:
+    """값 이스케이프 — '#'만(공백은 값에선 그대로). 기존 '\\:' 등은 건드리지 않음."""
+    return v.replace("#", "\\#")
+
+
+def _synth_tim(props, inst, items, vp):
+    """TIM 자동 설정 — 라벨에 ENC면 엔코더, 아니면 PWM 출력. 채널은 배정 핀에서 추출."""
+    chans = sorted({int(m.group(1)) for _, sig, _ in items
+                    for m in [re.search(r"CH(\d+)", sig)] if m})
+    is_enc = any("ENC" in (lb or "").upper() for _, _, lb in items) and {1, 2} <= set(chans)
+    if is_enc:
+        props[f"{inst}.EncoderMode"] = "TIM_ENCODERMODE_TI12"
+        props[f"{inst}.CounterMode"] = "TIM_COUNTERMODE_UP"
+        props[f"{inst}.Period"] = "65535"
+        props[f"{inst}.Prescaler"] = "0"
+        for ic in (1, 2):
+            props[f"{inst}.IC{ic}Polarity"] = "TIM_ICPOLARITY_RISING"
+            props[f"{inst}.IC{ic}Selection"] = "TIM_ICSELECTION_DIRECTTI"
+            props[f"{inst}.IC{ic}Prescaler"] = "TIM_ICPSC_DIV1"
+            props[f"{inst}.IC{ic}Filter"] = "0"
+        props[f"{inst}.IPParameters"] = (
+            "Prescaler,CounterMode,Period,EncoderMode,"
+            "IC1Polarity,IC1Selection,IC1Prescaler,IC1Filter,"
+            "IC2Polarity,IC2Selection,IC2Prescaler,IC2Filter"
+        )
+    else:
+        ch_keys = [f"Channel-PWM Generation{c} CH{c}" for c in chans]
+        for c in chans:
+            props[f"{inst}.Channel-PWM Generation{c} CH{c}"] = f"TIM_CHANNEL_{c}"
+        props[f"{inst}.CounterMode"] = "TIM_COUNTERMODE_UP"
+        props[f"{inst}.Period"] = "65535"
+        props[f"{inst}.Prescaler"] = "0"
+        props[f"{inst}.AutoReloadPreload"] = "TIM_AUTORELOAD_PRELOAD_DISABLE"
+        ipp = ["Prescaler", "CounterMode", "Period", "AutoReloadPreload"] + ch_keys
+        # 고급 타이머(TIM1/TIM8)는 상보+데드타임
+        if inst in ("TIM1", "TIM8") and any("CHN" in sig.upper() or sig.upper().endswith("N")
+                                            for _, sig, _ in items):
+            props[f"{inst}.RepetitionCounter"] = "0"
+            ipp.append("RepetitionCounter")
+        props[f"{inst}.IPParameters"] = ",".join(ipp)
+
+
+def _synth_adc(props, inst, items):
+    """ADC 자동 설정 — 배정된 IN 채널들을 정규 변환 랭크로 등록."""
+    chs = sorted({int(m.group(1)) for _, sig, _ in items
+                  for m in [re.search(r"IN(\d+)", sig)] if m})
+    if not chs:
+        return
+    props[f"{inst}.Mode"] = "ADC_MODE_INDEPENDENT"
+    props[f"{inst}.NbrOfConversion"] = str(len(chs))
+    props[f"{inst}.master"] = "1"
+    ipp = ["Mode", "NbrOfConversion", "master"]
+    for i, ch in enumerate(chs):
+        props[f"{inst}.Rank-{i}#ChannelRegularConversion"] = str(i + 1)
+        props[f"{inst}.Channel-{i}#ChannelRegularConversion"] = f"ADC_CHANNEL_{ch}"
+        props[f"{inst}.SamplingTime-{i}#ChannelRegularConversion"] = "ADC_SAMPLETIME_2CYCLES_5"
+        ipp += [f"Rank-{i}#ChannelRegularConversion",
+                f"Channel-{i}#ChannelRegularConversion",
+                f"SamplingTime-{i}#ChannelRegularConversion"]
+    props[f"{inst}.IPParameters"] = ",".join(ipp)
+
+
+def _synth_spi(props, inst, items):
+    """SPI 자동 설정 — SCK/MISO/MOSI는 Full-Duplex Master, NSS는 하드 출력."""
+    has_nss = any("NSS" in sig for _, sig, _ in items)
+    for pin, sig, _ in items:
+        props[f"{pin}.Mode"] = "NSS_Signal_Hard_Output" if "NSS" in sig else "Full_Duplex_Master"
+    props[f"{inst}.VirtualType"] = "VM_MASTER"
+    props[f"{inst}.Mode"] = "SPI_MODE_MASTER"
+    props[f"{inst}.Direction"] = "SPI_DIRECTION_2LINES"
+    props[f"{inst}.BaudRatePrescaler"] = "SPI_BAUDRATEPRESCALER_16"
+    ipp = ["VirtualType", "Mode", "Direction"]
+    if has_nss:
+        props[f"{inst}.VirtualNSS"] = "VM_NSSHARD"
+        ipp.append("VirtualNSS")
+    ipp.append("BaudRatePrescaler")
+    props[f"{inst}.IPParameters"] = ",".join(ipp)
+
+
+def _synth_fdcan(props, inst, items, vp):
+    """FDCAN 자동 설정 — 핀 FDCAN_Activate + 기본 클래식 프레임."""
+    for pin, _, _ in items:
+        props[f"{pin}.Mode"] = "FDCAN_Activate"
+    props[f"{inst}.FrameFormat"] = "FDCAN_FRAME_CLASSIC"
+    props[f"{inst}.NominalBaudRate"] = str(vp.get("fdcan_baudrate", 1000000))
+    props[f"{inst}.NominalSamplePoint"] = "87.5"
+    props[f"{inst}.IPParameters"] = "FrameFormat,NominalBaudRate,NominalSamplePoint"
+
+
 def _build_ioc_content(
     chip: str,
     vp: Dict[str, Any],
@@ -922,70 +1025,57 @@ def _build_ioc_content(
     crystal_hz = int(vp.get("crystal_mhz", 24)) * 1_000_000
     props["RCC.HSE_VALUE"] = str(crystal_hz)
 
-    # 3) 핀 신호 주입 + Mcu.Pin 열거 재구성
+    # 3) 핀 신호 주입 — 주변장치별로 모아 모드까지 자동 합성한다.
     #    VP_SYS 가상핀(Systick/DBSignals)을 항상 먼저 둔다 (스켈레톤이 보유).
     mcu_pins: List[str] = ["VP_SYS_VS_Systick", "VP_SYS_VS_DBSignals"]
-    used_ips: set = set()
     seen_pins: set = set()
+    periph: Dict[str, List[tuple]] = {}  # 인스턴스(TIM1..) → [(pin, signal, label)]
     for p in pins:
-        pin = str(p.get("pin", "")).strip()
+        pin = str(p.get("pin", "")).strip().upper()
         func = str(p.get("function", "")).strip()
         label = str(p.get("label", "")).strip()
         if not pin or pin in seen_pins:
             continue
         seen_pins.add(pin)
-        if func and func.upper() not in ("NAN", "NONE", "GPIO"):
-            props[f"{pin}.Signal"] = func
-            props[f"{pin}.Locked"] = "true"
-            ip = _peripheral_of(func)
-            if ip:
-                used_ips.add(ip)
+        mcu_pins.append(pin)
         if label:
             props[f"{pin}.GPIO_Label"] = label
-        mcu_pins.append(pin)
+        if not func or func.upper() in ("NAN", "NONE", "GPIO"):
+            continue
+        props[f"{pin}.Signal"] = _pin_signal_value(func)  # TIM은 S_ 접두
+        props[f"{pin}.Locked"] = "true"
+        ip = _peripheral_of(func)
+        if ip:
+            periph.setdefault(ip, []).append((pin, func, label))
 
     for i, mp in enumerate(mcu_pins):
         props[f"Mcu.Pin{i}"] = mp
     props["Mcu.PinsNb"] = str(len(mcu_pins))
 
-    # 4) IP 목록 재구성 — 기본 3종(NVIC/RCC/SYS) + 핀에서 추출한 주변장치
-    ip_list = ["NVIC", "RCC", "SYS"] + sorted(used_ips)
+    # 4) 주변장치 모드/채널 자동 합성 (배정 신호에서 연관 설정 유도)
+    for inst, items in periph.items():
+        kind = re.sub(r"\d+$", "", inst)  # TIM1→TIM, ADC1→ADC ...
+        if kind == "TIM":
+            _synth_tim(props, inst, items, vp)
+        elif kind == "ADC":
+            _synth_adc(props, inst, items)
+        elif kind == "SPI":
+            _synth_spi(props, inst, items)
+        elif kind == "FDCAN":
+            _synth_fdcan(props, inst, items, vp)
+        # 그 외(I2C/USART/OPAMP/COMP/DAC)는 Signal만 — CubeMX가 기본 모드로 표시
+
+    # 5) IP 목록 — 기본 3종(NVIC/RCC/SYS) + 합성된 주변장치
+    ip_list = ["NVIC", "RCC", "SYS"] + sorted(periph.keys())
     for i, ip in enumerate(ip_list):
         props[f"Mcu.IP{i}"] = ip
     props["Mcu.IPNb"] = str(len(ip_list))
 
-    # 5) 주변장치 최소 설정 (모드/채널) — 핀이 실제로 배정된 경우에만
-    deadtime_ns = vp.get("deadtime_ns", 500)
-    if "TIM1" in used_ips:
-        props["TIM1.IPParameters"] = (
-            "Channel-PWM Generation1 CH1,Channel-PWM Generation2 CH2,"
-            "Channel-PWM Generation3 CH3,CounterMode,DeadTime,RepetitionCounter"
-        )
-        props["TIM1.Channel-PWM Generation1 CH1"] = "TIM_CHANNEL_1"
-        props["TIM1.Channel-PWM Generation2 CH2"] = "TIM_CHANNEL_2"
-        props["TIM1.Channel-PWM Generation3 CH3"] = "TIM_CHANNEL_3"
-        props["TIM1.CounterMode"] = "TIM_COUNTERMODE_CENTERALIGNED1"
-        props["TIM1.DeadTime"] = str(_ns_to_deadtime_reg(deadtime_ns))
-        props["TIM1.RepetitionCounter"] = "1"
-    if "FDCAN1" in used_ips:
-        fdcan_baud = vp.get("fdcan_baudrate", 1000000)
-        props["FDCAN1.IPParameters"] = "FrameFormat,NominalBaudRate,NominalSamplePoint"
-        props["FDCAN1.FrameFormat"] = "FDCAN_FRAME_CLASSIC"
-        props["FDCAN1.NominalBaudRate"] = str(fdcan_baud)
-        props["FDCAN1.NominalSamplePoint"] = "87.5"
-    if "SPI1" in used_ips:
-        props["SPI1.IPParameters"] = "Mode,Direction,DataSize,CLKPolarity,CLKPhase"
-        props["SPI1.Mode"] = "SPI_MODE_MASTER"
-        props["SPI1.Direction"] = "SPI_DIRECTION_2LINES"
-        props["SPI1.DataSize"] = "SPI_DATASIZE_8BIT"
-        props["SPI1.CLKPolarity"] = "SPI_POLARITY_LOW"
-        props["SPI1.CLKPhase"] = "SPI_PHASE_1EDGE"
-
-    # 6) 직렬화 — CubeMX 스타일(헤더 주석 + 키 알파벳 정렬)
+    # 6) 직렬화 — 헤더 주석 + 키 알파벳 정렬 (Java Properties 이스케이프 적용)
     header = props.pop("__header__", "#MicroXplorer Configuration settings - do not modify")
     lines = [header]
     for k in sorted(props.keys()):
-        lines.append(f"{k}={props[k]}")
+        lines.append(f"{_esc_key(k)}={_esc_val(props[k])}")
     return lines
 
 
