@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -457,10 +458,20 @@ async def generate_ioc(request: GenerateIocRequest):
 
     logger.info("IOC 파일 생성: %s (%d 핀)", filename, len(pins))
 
+    # 미검증 칩 식별자 경고 (G471/G491/G4A1은 실제 CubeMX .ioc로 미확인)
+    msg = f".ioc 파일 생성 완료 ({len(pins)}핀)"
+    ck = chip.upper().strip()
+    ck = next((k for k in CHIP_IDENTITY if ck.startswith(k)), "STM32G474")
+    if CHIP_IDENTITY[ck].get("verified") != "1":
+        msg += (
+            f" ⚠️ {ck} 식별자는 미검증입니다(검증: G431/G474). "
+            "CubeMX 로드 실패 시 실제 .ioc의 Mcu.Name/CPN으로 확인이 필요합니다."
+        )
+
     return GenerateIocResponse(
         ioc_filename=filename,
         download_url=f"/v1/download-ioc/{filename}",
-        message=f".ioc 파일 생성 완료 ({len(pins)}핀)",
+        message=msg,
     )
 
 
@@ -673,76 +684,243 @@ def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"채팅 에이전트 오류: {e}")
 
 
+# 칩별 식별 문자열 — STM32CubeMX가 MCU DB를 조회하는 키. 잘못되면 로드시
+# NumberFormatException(parseInt(""))으로 .ioc가 안 열린다.
+# G431/G474는 dataset의 실제 CubeMX .ioc에서 검증됨. 나머지는 ⚠️ 미검증(실파일 확인 필요).
+CHIP_IDENTITY: Dict[str, Dict[str, str]] = {
+    "STM32G431": {"cpn": "STM32G431RBT3", "name": "STM32G431R(6-8-B)Tx",
+                  "user": "STM32G431RBTx", "pkg": "LQFP64", "verified": "1"},
+    "STM32G474": {"cpn": "STM32G474RET3", "name": "STM32G474R(B-C-E)Tx",
+                  "user": "STM32G474RETx", "pkg": "LQFP64", "verified": "1"},
+    "STM32G471": {"cpn": "STM32G471RET3", "name": "STM32G471R(C-E)Tx",
+                  "user": "STM32G471RETx", "pkg": "LQFP64", "verified": "0"},
+    "STM32G491": {"cpn": "STM32G491RET3", "name": "STM32G491R(C-E)Tx",
+                  "user": "STM32G491RETx", "pkg": "LQFP64", "verified": "0"},
+    "STM32G4A1": {"cpn": "STM32G4A1RET3", "name": "STM32G4A1R(C-E)Tx",
+                  "user": "STM32G4A1RETx", "pkg": "LQFP64", "verified": "0"},
+}
+
+# 칩 독립적인 깡통 스켈레톤 — dataset의 실제 CubeMX 출력
+# (NUCLEO-G431RB/GPIO_IOToggle.ioc)에서 식별·핀열거·IP목록만 제거하고 그대로 보존.
+# NVIC/RCC(170MHz 클럭트리)/ProjectManager/SYS는 검증된 값이라 손대지 않는다.
+_STATIC_IOC = """\
+#MicroXplorer Configuration settings - do not modify
+CAD.formats=
+CAD.pinconfig=
+CAD.provider=
+File.Version=6
+KeepUserPlacement=true
+Mcu.Family=STM32G4
+Mcu.ThirdPartyNb=0
+Mcu.UserConstants=
+MxCube.Version=6.10.0
+MxDb.Version=DB.6.0.100
+NVIC.BusFault_IRQn=true\\:0\\:0\\:false\\:false\\:false\\:true\\:false\\:false
+NVIC.DebugMonitor_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.ForceEnableDMAVector=true
+NVIC.HardFault_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.MemoryManagement_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.NonMaskableInt_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.PendSV_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.PriorityGroup=NVIC_PRIORITYGROUP_4
+NVIC.SVCall_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
+NVIC.SysTick_IRQn=true\\:0\\:0\\:true\\:false\\:true\\:true\\:true\\:false
+NVIC.UsageFault_IRQn=true\\:0\\:0\\:false\\:false\\:false\\:true\\:false\\:false
+PinOutPanel.RotationAngle=0
+ProjectManager.AskForMigrate=true
+ProjectManager.BackupPrevious=false
+ProjectManager.CompilerOptimize=6
+ProjectManager.ComputerToolchain=false
+ProjectManager.CoupleFile=false
+ProjectManager.DeletePrevious=true
+ProjectManager.FreePins=false
+ProjectManager.HalAssertFull=false
+ProjectManager.HeapSize=0x200
+ProjectManager.KeepUserCode=true
+ProjectManager.LastFirmware=true
+ProjectManager.LibraryCopy=2
+ProjectManager.MainLocation=Src
+ProjectManager.NoMain=false
+ProjectManager.PreviousToolchain=
+ProjectManager.ProjectBuild=false
+ProjectManager.RegisterCallBack=
+ProjectManager.StackSize=0x400
+ProjectManager.TargetToolchain=STM32CubeIDE
+ProjectManager.ToolChainLocation=
+ProjectManager.UAScriptAfterPath=
+ProjectManager.UAScriptBeforePath=
+ProjectManager.UnderRoot=true
+ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false
+RCC.ADC12Freq_Value=170000000
+RCC.AHBFreq_Value=170000000
+RCC.APB1Freq_Value=170000000
+RCC.APB1TimFreq_Value=170000000
+RCC.APB2Freq_Value=170000000
+RCC.APB2TimFreq_Value=170000000
+RCC.CRSFreq_Value=48000000
+RCC.CortexFreq_Value=170000000
+RCC.EXTERNAL_CLOCK_VALUE=12288000
+RCC.FCLKCortexFreq_Value=170000000
+RCC.FDCANFreq_Value=170000000
+RCC.FamilyName=M
+RCC.HCLKFreq_Value=170000000
+RCC.HSE_VALUE=24000000
+RCC.HSI48_VALUE=48000000
+RCC.HSI_VALUE=16000000
+RCC.I2C1Freq_Value=170000000
+RCC.I2C2Freq_Value=170000000
+RCC.I2C3Freq_Value=170000000
+RCC.I2SFreq_Value=170000000
+RCC.IPParameters=ADC12Freq_Value,AHBFreq_Value,APB1Freq_Value,APB1TimFreq_Value,APB2Freq_Value,APB2TimFreq_Value,CRSFreq_Value,CortexFreq_Value,EXTERNAL_CLOCK_VALUE,FCLKCortexFreq_Value,FDCANFreq_Value,FamilyName,HCLKFreq_Value,HSE_VALUE,HSI48_VALUE,HSI_VALUE,I2C1Freq_Value,I2C2Freq_Value,I2C3Freq_Value,I2SFreq_Value,LPTIM1Freq_Value,LPUART1Freq_Value,LSCOPinFreq_Value,LSE_VALUE,LSI_VALUE,MCO1PinFreq_Value,PLLM,PLLN,PLLPoutputFreq_Value,PLLQoutputFreq_Value,PLLRCLKFreq_Value,PWRFreq_Value,RNGFreq_Value,SAI1Freq_Value,SYSCLKFreq_VALUE,SYSCLKSource,UART4Freq_Value,USART1Freq_Value,USART2Freq_Value,USART3Freq_Value,USBFreq_Value,VCOInputFreq_Value,VCOOutputFreq_Value
+RCC.LPTIM1Freq_Value=170000000
+RCC.LPUART1Freq_Value=170000000
+RCC.LSCOPinFreq_Value=32000
+RCC.LSE_VALUE=32768
+RCC.LSI_VALUE=32000
+RCC.MCO1PinFreq_Value=16000000
+RCC.PLLM=RCC_PLLM_DIV4
+RCC.PLLN=85
+RCC.PLLPoutputFreq_Value=170000000
+RCC.PLLQoutputFreq_Value=170000000
+RCC.PLLRCLKFreq_Value=170000000
+RCC.PWRFreq_Value=170000000
+RCC.RNGFreq_Value=170000000
+RCC.SAI1Freq_Value=170000000
+RCC.SYSCLKFreq_VALUE=170000000
+RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK
+RCC.UART4Freq_Value=170000000
+RCC.USART1Freq_Value=170000000
+RCC.USART2Freq_Value=170000000
+RCC.USART3Freq_Value=170000000
+RCC.USBFreq_Value=170000000
+RCC.VCOInputFreq_Value=4000000
+RCC.VCOOutputFreq_Value=340000000
+VP_SYS_VS_DBSignals.Mode=DisableDeadBatterySignals
+VP_SYS_VS_DBSignals.Signal=SYS_VS_DBSignals
+VP_SYS_VS_Systick.Mode=SysTick
+VP_SYS_VS_Systick.Signal=SYS_VS_Systick
+board=custom
+"""
+
+
+def _peripheral_of(func: str) -> Optional[str]:
+    """신호 함수명에서 주변장치 인스턴스 추출. 예: TIM1_CH1→TIM1, FDCAN1_TX→FDCAN1,
+    SPI1_SCK→SPI1, ADC1_IN1→ADC1. 매칭 안 되면(GPIO 등) None."""
+    m = re.match(
+        r"^(TIM\d+|FDCAN\d+|SPI\d+|I2C\d+|USART\d+|UART\d+|LPUART\d+|"
+        r"ADC\d+|DAC\d+|OPAMP\d+|COMP\d+)",
+        func.upper(),
+    )
+    return m.group(1) if m else None
+
+
 def _build_ioc_content(
     chip: str,
     vp: Dict[str, Any],
     pins: List[Dict[str, Any]],
 ) -> List[str]:
-    """STM32CubeMX .ioc 포맷 생성."""
-    lines = [
-        f"# STM32G4 Motor Drive Agent — 자동 생성 .ioc",
-        f"# chip: {chip}",
-        "",
-        f"Mcu.Family=STM32G4",
-        f"Mcu.Name={chip.replace('STM32', 'STM32')}",
-        f"Mcu.Package=LQFP64",
-        f"ProjectManager.ProjectName={chip}_MotorDrive",
-        f"ProjectManager.LibraryCopySrc=1",
-        f"ProjectManager.ProjectBuildStruct=",
-        f"ProjectManager.CodeGenerationMode=1",
-        "",
-        f"RCC.HSEState=RCC_HSE_ON",
-        f"RCC.HSEFreq={vp.get('crystal_mhz', 24)}000000",
-        f"RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK",
-        f"RCC.PLLState=RCC_PLL_ON",
-        f"RCC.PLLM=1",
-        f"RCC.SYSCLKFreq_VALUE={vp.get('clock_mhz', 170)}000000",
-        "",
-    ]
+    """검증된 깡통 .ioc 템플릿에 핀맵을 주입해 유효한 STM32CubeMX .ioc 생성.
 
-    for i, p in enumerate(pins):
-        pin = p.get("pin", "")
-        func = p.get("function", "")
-        label = p.get("label", "")
-        if pin and func:
-            lines.append(f"{pin}.Signal={func}")
-            if label:
-                lines.append(f"{pin}.GPIO_Label={label}")
+    설계(work/step2_workflow/01_pinmap_to_ioc.md): 처음부터 만들지 않고 실제 CubeMX
+    출력 기반 스켈레톤(_STATIC_IOC)을 로드한 뒤 식별/핀열거/IP목록/신호만 주입한다.
+    핸드롤 방식은 Mcu.PinsNb·Mcu.Name 등 필수 필드 누락으로 CubeMX 로드가 깨졌다.
+    """
+    chip_key = chip.upper().strip()
+    if chip_key not in CHIP_IDENTITY:
+        # "STM32G474RETX" / "STM32G474RE" 같은 변형 → 등록 키 접두 매칭
+        chip_key = next(
+            (k for k in CHIP_IDENTITY if chip_key.startswith(k)),
+            "STM32G474",
+        )
+    ident = CHIP_IDENTITY[chip_key]
 
-    motor_count = vp.get("motor_count", 1)
+    # 1) 스켈레톤을 key→value 딕셔너리로 로드 (verbatim 보존)
+    props: Dict[str, str] = {}
+    for ln in _STATIC_IOC.splitlines():
+        if ln.startswith("#") or "=" not in ln:
+            props.setdefault("__header__", ln)  # 첫 줄 주석 보존
+            continue
+        k, v = ln.split("=", 1)
+        props[k] = v
+
+    # 2) 칩 식별 필드 주입
+    proj_name = f"{chip_key}_MotorDrive"
+    props["Mcu.CPN"] = ident["cpn"]
+    props["Mcu.Name"] = ident["name"]
+    props["Mcu.Package"] = ident["pkg"]
+    props["Mcu.UserName"] = ident["user"]
+    props["ProjectManager.DeviceId"] = ident["user"]
+    props["ProjectManager.ProjectName"] = proj_name
+    props["ProjectManager.ProjectFileName"] = f"{proj_name}.ioc"
+
+    # HSE(크리스털) 주파수 반영
+    crystal_hz = int(vp.get("crystal_mhz", 24)) * 1_000_000
+    props["RCC.HSE_VALUE"] = str(crystal_hz)
+
+    # 3) 핀 신호 주입 + Mcu.Pin 열거 재구성
+    #    VP_SYS 가상핀(Systick/DBSignals)을 항상 먼저 둔다 (스켈레톤이 보유).
+    mcu_pins: List[str] = ["VP_SYS_VS_Systick", "VP_SYS_VS_DBSignals"]
+    used_ips: set = set()
+    seen_pins: set = set()
+    for p in pins:
+        pin = str(p.get("pin", "")).strip()
+        func = str(p.get("function", "")).strip()
+        label = str(p.get("label", "")).strip()
+        if not pin or pin in seen_pins:
+            continue
+        seen_pins.add(pin)
+        if func and func.upper() not in ("NAN", "NONE", "GPIO"):
+            props[f"{pin}.Signal"] = func
+            props[f"{pin}.Locked"] = "true"
+            ip = _peripheral_of(func)
+            if ip:
+                used_ips.add(ip)
+        if label:
+            props[f"{pin}.GPIO_Label"] = label
+        mcu_pins.append(pin)
+
+    for i, mp in enumerate(mcu_pins):
+        props[f"Mcu.Pin{i}"] = mp
+    props["Mcu.PinsNb"] = str(len(mcu_pins))
+
+    # 4) IP 목록 재구성 — 기본 3종(NVIC/RCC/SYS) + 핀에서 추출한 주변장치
+    ip_list = ["NVIC", "RCC", "SYS"] + sorted(used_ips)
+    for i, ip in enumerate(ip_list):
+        props[f"Mcu.IP{i}"] = ip
+    props["Mcu.IPNb"] = str(len(ip_list))
+
+    # 5) 주변장치 최소 설정 (모드/채널) — 핀이 실제로 배정된 경우에만
     deadtime_ns = vp.get("deadtime_ns", 500)
-    if motor_count >= 1:
-        lines += [
-            "",
-            "TIM1.Channel-PWM Generation1 CH1=TIM_CHANNEL_1",
-            "TIM1.Channel-PWM Generation2 CH2=TIM_CHANNEL_2",
-            "TIM1.Channel-PWM Generation3 CH3=TIM_CHANNEL_3",
-            "TIM1.CounterMode=TIM_COUNTERMODE_CENTERALIGNED1",
-            f"TIM1.DeadTime={_ns_to_deadtime_reg(deadtime_ns)}",
-            "TIM1.RepetitionCounter=1",
-        ]
-
-    comms = vp.get("comms", [])
-    if "fdcan" in comms:
+    if "TIM1" in used_ips:
+        props["TIM1.IPParameters"] = (
+            "Channel-PWM Generation1 CH1,Channel-PWM Generation2 CH2,"
+            "Channel-PWM Generation3 CH3,CounterMode,DeadTime,RepetitionCounter"
+        )
+        props["TIM1.Channel-PWM Generation1 CH1"] = "TIM_CHANNEL_1"
+        props["TIM1.Channel-PWM Generation2 CH2"] = "TIM_CHANNEL_2"
+        props["TIM1.Channel-PWM Generation3 CH3"] = "TIM_CHANNEL_3"
+        props["TIM1.CounterMode"] = "TIM_COUNTERMODE_CENTERALIGNED1"
+        props["TIM1.DeadTime"] = str(_ns_to_deadtime_reg(deadtime_ns))
+        props["TIM1.RepetitionCounter"] = "1"
+    if "FDCAN1" in used_ips:
         fdcan_baud = vp.get("fdcan_baudrate", 1000000)
-        lines += [
-            "",
-            "FDCAN1.FrameFormat=FDCAN_FRAME_CLASSIC",
-            f"FDCAN1.NominalBaudRate={fdcan_baud}",
-            "FDCAN1.NominalSamplePoint=87.5",
-        ]
+        props["FDCAN1.IPParameters"] = "FrameFormat,NominalBaudRate,NominalSamplePoint"
+        props["FDCAN1.FrameFormat"] = "FDCAN_FRAME_CLASSIC"
+        props["FDCAN1.NominalBaudRate"] = str(fdcan_baud)
+        props["FDCAN1.NominalSamplePoint"] = "87.5"
+    if "SPI1" in used_ips:
+        props["SPI1.IPParameters"] = "Mode,Direction,DataSize,CLKPolarity,CLKPhase"
+        props["SPI1.Mode"] = "SPI_MODE_MASTER"
+        props["SPI1.Direction"] = "SPI_DIRECTION_2LINES"
+        props["SPI1.DataSize"] = "SPI_DATASIZE_8BIT"
+        props["SPI1.CLKPolarity"] = "SPI_POLARITY_LOW"
+        props["SPI1.CLKPhase"] = "SPI_PHASE_1EDGE"
 
-    if vp.get("spi_eeprom"):
-        lines += [
-            "",
-            "SPI1.Mode=SPI_MODE_MASTER",
-            "SPI1.Direction=SPI_DIRECTION_2LINES",
-            "SPI1.DataSize=SPI_DATASIZE_8BIT",
-            "SPI1.CLKPolarity=SPI_POLARITY_LOW",
-            "SPI1.CLKPhase=SPI_PHASE_1EDGE",
-        ]
-
-    lines += ["", "# End of .ioc"]
+    # 6) 직렬화 — CubeMX 스타일(헤더 주석 + 키 알파벳 정렬)
+    header = props.pop("__header__", "#MicroXplorer Configuration settings - do not modify")
+    lines = [header]
+    for k in sorted(props.keys()):
+        lines.append(f"{k}={props[k]}")
     return lines
 
 
