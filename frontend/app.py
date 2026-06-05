@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -159,6 +160,65 @@ def _fn_choices(pin: str, cur: str, pin_opts: dict, common: list) -> list:
     if cur and cur not in choices:
         choices.insert(1, cur)  # 기존값(SWDIO/FDCAN 등) 유지
     return choices
+
+
+def _suggest_function(label: str, pin: str, pin_opts: dict) -> str:
+    """라벨에서 function 추정 — 그 핀에서 실제 가능한 AF 중에서 고른다(추정값, 검토용).
+
+    매칭 안 되면 "" 반환(미지정). 통신/디버그처럼 명확한 것부터, 모호하면 비움.
+    """
+    opts = pin_opts.get(pin, [])
+    lab = (label or "").upper()
+    if not lab:
+        return ""
+
+    def pick(pat: str) -> Optional[str]:
+        rx = re.compile(pat)
+        return next((o for o in opts if rx.match(o)), None)
+
+    rules = [
+        # (라벨 패턴, 핀 AF 패턴 또는 GPIO 상수)
+        (r"SWDIO", r"SYS_JTMS"),
+        (r"SWCLK|SWDCLK", r"SYS_JTCK"),
+        (r"SWO|TRACE", r"SYS_JTDO"),
+        (r"CAN.?TX|CANTX", r"FDCAN\d+_TX"),
+        (r"CAN.?RX|CANRX", r"FDCAN\d+_RX"),
+        (r"MISO", r"SPI\d+_MISO"),
+        (r"MOSI", r"SPI\d+_MOSI"),
+        (r"SCK|SPI.?CLK", r"SPI\d+_SCK"),
+        (r"NSS|SPI.?CS|_CS\b|CS_", r"SPI\d+_NSS"),
+        (r"SCL", r"I2C\d+_SCL"),
+        (r"SDA", r"I2C\d+_SDA"),
+        (r"U?ART.?TX|TXD|\bTX\b", r"(US|LPU)?ART\d+_TX"),
+        (r"U?ART.?RX|RXD|\bRX\b", r"(US|LPU)?ART\d+_RX"),
+        (r"XTAL.?IN|HSE.?IN|OSC.?IN|XTAL.?1|OSC.?1", r"RCC_OSC_IN"),
+        (r"XTAL.?OUT|HSE.?OUT|OSC.?OUT|XTAL.?2|OSC.?2", r"RCC_OSC_OUT"),
+        # 모터 제어
+        (r"ENBL|ENABLE|PWM", r"TIM\d+_CH\d+$"),           # 속도제어 PWM
+        (r"ENC|ENCODER|QEI|HALL", r"TIM\d+_CH\d+$"),       # 엔코더 입력
+        # 아날로그 (전류/포텐셔미터/전압·온도 센스)
+        (r"CURR|ISENS|I_SENS|SENSE|VSENS|V_SENS|POT|POTENTIO|\bAIN\b|ADC|VBUS|VMON|NTC|TEMP",
+         r"ADC\d+_IN\d+"),
+    ]
+    for lab_pat, fn_pat in rules:
+        if re.search(lab_pat, lab):
+            if fn_pat.startswith("GPIO"):
+                return fn_pat
+            hit = pick(fn_pat)
+            if hit:
+                return hit
+            # AF 후보가 없을 때의 합리적 폴백
+            if "TIM" in fn_pat:
+                return "GPIO_Output" if re.search(r"ENBL|ENABLE|PWM", lab) else ""
+            if "ADC" in fn_pat:
+                return "GPIO_Analog"
+            return ""
+    # 순수 디지털 IO
+    if re.search(r"DIR|DIRECTION|RELAY|LED|\bEN_|_EN\b|STBY|SLEEP|RESET_DRV", lab):
+        return "GPIO_Output"
+    if re.search(r"FAULT|FLT|nINT|_INT\b|ALERT|RDY|READY|DIAG|\bPG\b|nOC", lab):
+        return "GPIO_Input"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -662,9 +722,14 @@ with tab1:
         # 이 패키지의 전체 핀(AF 옵션=패키지 정확 핀목록 ∪ 판독핀)을 이름순으로.
         # io맵은 서브패밀리 전체(다른 패키지 핀 포함)라 universe엔 안 넣고 배지에만 쓴다.
         _universe = set(_pin_opts) | set(_vision)
-        _show_all = st.checkbox(
+        _cc = st.columns(2)
+        _show_all = _cc[0].checkbox(
             "칩의 모든 핀 표시 (미판독 포함 — OCR 누락·밀림 보정용)",
             value=True, key="confirm_show_all",
+        )
+        _auto_fn = _cc[1].checkbox(
+            "라벨로 function 자동 추정 (검토 후 수정)",
+            value=True, key="confirm_auto_fn",
         )
         _pin_list = sorted(_universe if _show_all else set(_vision), key=_pin_sort_key)
 
@@ -672,8 +737,13 @@ with tab1:
         _hc[0].markdown("**IO**"); _hc[1].markdown("**핀**")
         _hc[2].markdown("**라벨**"); _hc[3].markdown("**function**")
         _rows = []
+        _suggested = 0
         for pin in _pin_list:
             _lbl0, cur = _vision.get(pin, ("", ""))
+            if not cur and _auto_fn:
+                cur = _suggest_function(_lbl0, pin, _pin_opts)  # 라벨→추정(검토용)
+                if cur:
+                    _suggested += 1
             choices = _fn_choices(pin, cur, _pin_opts, _common)
             c0, c1, c2, c3 = st.columns([0.9, 1, 1.6, 2.6])
             c0.markdown(_io_badge(pin))
@@ -689,8 +759,8 @@ with tab1:
                 _rows.append({"chip": _chip_now, "pin": pin, "function": _func, "label": _lbl})
         edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "function", "label"])
         _set = sum(1 for r in _rows if r["function"])
-        st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 라벨/function 채움 "
-                   f"{len(_rows)} · function 지정 {_set}")
+        st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 자동추정 {_suggested} · "
+                   f"function 지정 {_set} (⚠️ 추정값은 검토·수정하세요)")
 
         # 위 드롭다운 편집기가 단일 소스. 검증에 넘어갈 핀맵을 읽기전용으로 미리보기(항상 싱크).
         with st.expander("검증에 넘길 핀맵 미리보기 (CSV)", expanded=False):
