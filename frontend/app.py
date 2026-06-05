@@ -139,6 +139,28 @@ for key, default in [
         st.session_state[key] = default
 
 
+def _fetch_pin_options(chip: str) -> dict:
+    """백엔드에서 칩의 핀별 function 옵션을 가져온다(세션 캐시)."""
+    chip = (chip or "").strip()
+    cache = st.session_state.setdefault("_pin_opts_cache", {})
+    if chip and chip not in cache:
+        try:
+            r = requests.get(f"{BACKEND_URL}/v1/pin-options/{chip}", timeout=10)
+            cache[chip] = r.json() if r.status_code == 200 else {}
+        except Exception:
+            cache[chip] = {}
+    return cache.get(chip, {})
+
+
+def _fn_choices(pin: str, cur: str, pin_opts: dict, common: list) -> list:
+    """한 핀의 드롭다운 선택지: (미지정) + 핀 AF + GPIO + 기존값 보존."""
+    opts = pin_opts.get(pin, [])
+    choices = ["(미지정)"] + opts + [c for c in common if c not in opts]
+    if cur and cur not in choices:
+        choices.insert(1, cur)  # 기존값(SWDIO/FDCAN 등) 유지
+    return choices
+
+
 # ---------------------------------------------------------------------------
 # 사이드바 — 연결 상태
 # ---------------------------------------------------------------------------
@@ -592,13 +614,56 @@ with tab1:
             placeholder="예: STM32G431RBI6",
         )
         try:
-            _edit_df = pd.read_csv(StringIO(st.session_state.confirm_pinmap_csv))
+            _base_df = pd.read_csv(StringIO(st.session_state.confirm_pinmap_csv))
         except Exception:
-            _edit_df = pd.DataFrame(columns=["chip", "pin", "function", "label"])
-        edited_df = st.data_editor(
-            _edit_df, num_rows="dynamic", use_container_width=True, key="pinmap_editor",
-        )
-        st.caption(f"행 {len(edited_df)}개 — 행 추가/삭제/수정 가능")
+            _base_df = pd.DataFrame(columns=["chip", "pin", "function", "label"])
+        for _c in ["chip", "pin", "function", "label"]:
+            if _c not in _base_df.columns:
+                _base_df[_c] = ""
+
+        _chip_now = (st.session_state.confirm_chip or "").strip()
+        _opts = _fetch_pin_options(_chip_now)
+        _pin_opts = _opts.get("pins", {})
+        _common = _opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
+
+        def _clean(v):
+            v = "" if v is None else str(v).strip()
+            return "" if v.lower() == "nan" else v
+
+        st.markdown("**핀별 function 지정** — AF 드롭다운에서 선택 (ENBL→TIMx_CHy, "
+                    "전류센스/포텐셔미터→ADCx_INy, 엔코더→TIMx_CHy, DIR/nFAULT→GPIO_Output)")
+        if not _opts.get("found"):
+            st.warning(f"이 칩({_opts.get('mcu_name') or _chip_now or '?'})의 AF 옵션을 "
+                       "못 찾았습니다. 칩 부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
+
+        _hc = st.columns([1, 1.6, 2.6])
+        _hc[0].markdown("**핀**"); _hc[1].markdown("**라벨**"); _hc[2].markdown("**function**")
+        _rows = []
+        for _, _row in _base_df.iterrows():
+            pin = _clean(_row.get("pin")).upper()
+            if not pin:
+                continue
+            cur = _clean(_row.get("function"))
+            choices = _fn_choices(pin, cur, _pin_opts, _common)
+            c1, c2, c3 = st.columns([1, 1.6, 2.6])
+            c1.markdown(f"`{pin}`")
+            _lbl = c2.text_input("l", value=_clean(_row.get("label")),
+                                 key=f"clbl_{_chip_now}_{pin}", label_visibility="collapsed")
+            _sel = c3.selectbox("f", choices,
+                                index=(choices.index(cur) if cur in choices else 0),
+                                key=f"cfn_{_chip_now}_{pin}", label_visibility="collapsed")
+            _rows.append({"chip": _chip_now, "pin": pin,
+                          "function": "" if _sel == "(미지정)" else _sel, "label": _lbl})
+        edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "function", "label"])
+        _set = sum(1 for r in _rows if r["function"])
+        st.caption(f"핀 {len(_rows)}개 · function 지정 {_set}개")
+
+        with st.expander("고급 — 원본 CSV 직접 편집(행 추가/삭제)", expanded=False):
+            st.caption("여기서 편집한 뒤 아래 체크하면 드롭다운 대신 이 내용으로 검증합니다.")
+            _raw_df = st.data_editor(_base_df, num_rows="dynamic",
+                                     use_container_width=True, key="pinmap_editor_raw")
+            if st.checkbox("이 직접편집(CSV) 내용으로 검증", key="use_raw_csv"):
+                edited_df = _raw_df
 
         st.markdown("**연결된 페리페럴 / 외부 부품** (Vision 추출 — 수정 가능)")
         st.session_state.confirm_peripherals = st.text_area(
