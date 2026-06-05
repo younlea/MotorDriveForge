@@ -458,10 +458,9 @@ async def generate_ioc(request: GenerateIocRequest):
 
     logger.info("IOC 파일 생성: %s (%d 핀)", filename, len(pins))
 
-    # 미검증 칩 식별자 경고 (G471/G491/G4A1은 실제 CubeMX .ioc로 미확인)
+    # 미검증 칩 식별자 경고 (실제 CubeMX .ioc로 미확인된 변종)
     msg = f".ioc 파일 생성 완료 ({len(pins)}핀)"
-    ck = chip.upper().strip()
-    ck = next((k for k in CHIP_IDENTITY if ck.startswith(k)), "STM32G474")
+    ck = _resolve_chip_key(chip)
     if CHIP_IDENTITY[ck].get("verified") != "1":
         msg += (
             f" ⚠️ {ck} 식별자는 미검증입니다(검증: G431/G474). "
@@ -685,20 +684,35 @@ def chat(request: ChatRequest):
 
 
 # 칩별 식별 문자열 — STM32CubeMX가 MCU DB를 조회하는 키. 잘못되면 로드시
-# NumberFormatException(parseInt(""))으로 .ioc가 안 열린다.
-# G431/G474는 dataset의 실제 CubeMX .ioc에서 검증됨. 나머지는 ⚠️ 미검증(실파일 확인 필요).
+# NumberFormatException(parseInt(""))으로 .ioc가 안 열린다. 식별자가 설치된 DB 버전
+# (DB.6.0.170)에 존재해야 하며, MxDb.Version도 그 툴에 맞춰야 마이그레이션 크래시를 피한다.
+# STM32G474(48핀 C변종)는 사용자의 실제 정상 .ioc(hand-can-router, MxCube 6.17/DB.6.0.170)에서
+# 검증됨. STM32G474R(64핀)/G431 등은 ⚠️ 미검증 — 해당 칩의 실제 CubeMX .ioc로 식별자 확인 필요.
 CHIP_IDENTITY: Dict[str, Dict[str, str]] = {
-    "STM32G431": {"cpn": "STM32G431RBT3", "name": "STM32G431R(6-8-B)Tx",
-                  "user": "STM32G431RBTx", "pkg": "LQFP64", "verified": "1"},
-    "STM32G474": {"cpn": "STM32G474RET3", "name": "STM32G474R(B-C-E)Tx",
-                  "user": "STM32G474RETx", "pkg": "LQFP64", "verified": "1"},
-    "STM32G471": {"cpn": "STM32G471RET3", "name": "STM32G471R(C-E)Tx",
+    # 사용자 보드 = STM32G474CET6 (LQFP48). 실파일로 검증된 유일한 G474 식별자.
+    "STM32G474": {"cpn": "STM32G474CET6", "name": "STM32G474C(B-C-E)Tx",
+                  "user": "STM32G474CETx", "pkg": "LQFP48", "verified": "1"},
+    "STM32G474R": {"cpn": "STM32G474RET6", "name": "STM32G474R(B-C-E)Tx",
+                   "user": "STM32G474RETx", "pkg": "LQFP64", "verified": "0"},
+    "STM32G431": {"cpn": "STM32G431RBT6", "name": "STM32G431R(6-8-B)Tx",
+                  "user": "STM32G431RBTx", "pkg": "LQFP64", "verified": "0"},
+    "STM32G471": {"cpn": "STM32G471RET6", "name": "STM32G471R(C-E)Tx",
                   "user": "STM32G471RETx", "pkg": "LQFP64", "verified": "0"},
-    "STM32G491": {"cpn": "STM32G491RET3", "name": "STM32G491R(C-E)Tx",
+    "STM32G491": {"cpn": "STM32G491RET6", "name": "STM32G491R(C-E)Tx",
                   "user": "STM32G491RETx", "pkg": "LQFP64", "verified": "0"},
-    "STM32G4A1": {"cpn": "STM32G4A1RET3", "name": "STM32G4A1R(C-E)Tx",
+    "STM32G4A1": {"cpn": "STM32G4A1RET6", "name": "STM32G4A1R(C-E)Tx",
                   "user": "STM32G4A1RETx", "pkg": "LQFP64", "verified": "0"},
 }
+
+
+def _resolve_chip_key(chip: str) -> str:
+    """칩 문자열 → CHIP_IDENTITY 키. 정확 매칭 우선, 없으면 가장 긴 접두 매칭.
+    'STM32G474RET6'가 짧은 'STM32G474'(48핀)에 잘못 걸리지 않도록 최장 접두를 고른다."""
+    ck = chip.upper().strip()
+    if ck in CHIP_IDENTITY:
+        return ck
+    cands = [k for k in CHIP_IDENTITY if ck.startswith(k)]
+    return max(cands, key=len) if cands else "STM32G474"
 
 # 칩 독립적인 깡통 스켈레톤 — dataset의 실제 CubeMX 출력
 # (NUCLEO-G431RB/GPIO_IOToggle.ioc)에서 식별·핀열거·IP목록만 제거하고 그대로 보존.
@@ -713,8 +727,8 @@ KeepUserPlacement=true
 Mcu.Family=STM32G4
 Mcu.ThirdPartyNb=0
 Mcu.UserConstants=
-MxCube.Version=6.10.0
-MxDb.Version=DB.6.0.100
+MxCube.Version=6.17.0
+MxDb.Version=DB.6.0.170
 NVIC.BusFault_IRQn=true\\:0\\:0\\:false\\:false\\:false\\:true\\:false\\:false
 NVIC.DebugMonitor_IRQn=true\\:0\\:0\\:false\\:false\\:true\\:true\\:false\\:false
 NVIC.ForceEnableDMAVector=true
@@ -825,13 +839,7 @@ def _build_ioc_content(
     출력 기반 스켈레톤(_STATIC_IOC)을 로드한 뒤 식별/핀열거/IP목록/신호만 주입한다.
     핸드롤 방식은 Mcu.PinsNb·Mcu.Name 등 필수 필드 누락으로 CubeMX 로드가 깨졌다.
     """
-    chip_key = chip.upper().strip()
-    if chip_key not in CHIP_IDENTITY:
-        # "STM32G474RETX" / "STM32G474RE" 같은 변형 → 등록 키 접두 매칭
-        chip_key = next(
-            (k for k in CHIP_IDENTITY if chip_key.startswith(k)),
-            "STM32G474",
-        )
+    chip_key = _resolve_chip_key(chip)
     ident = CHIP_IDENTITY[chip_key]
 
     # 1) 스켈레톤을 key→value 딕셔너리로 로드 (verbatim 보존)
