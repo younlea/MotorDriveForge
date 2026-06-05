@@ -329,16 +329,17 @@ class ReviewAgent:
         핀맵 추출 전용: num_predict를 낮춰 생성 토큰을 제한 (속도 핵심).
         스트리밍으로 호출 — 이미지 인코딩이 오래 걸려도 첫 토큰만 read_timeout 안에 오면 OK.
         """
-        # 추론 ON: OpenWebUI(추론 켜짐, 단순 프롬프트)는 핀 읽기 정확도가 ~90%인데,
-        # think=False로 끄면 정확도가 크게 떨어짐. 회로도를 한 핀씩 꼼꼼히 읽는 데는 추론이 필요.
-        # content가 비면 _ollama_stream이 아니라 아래 루프에서 thinking 폴백 처리.
-        # num_predict 넉넉히(추론 + 전체 핀맵 + 페리페럴). num_ctx는 Modelfile(32K) 따름.
+        # think=False: 이 모델은 추론을 켜면 thinking에 토큰을 다 써(20k자, done_reason=length)
+        # 정작 CSV를 못 내고 ~20분 걸림. 추론 끄면 답(CSV)을 바로 냄. 정확도는 프롬프트/온도로 보강.
+        # num_predict: 핀 많은 CSV + PERIPHERALS + SUMMARY가 다 들어가게 넉넉히(추론 없으니 안전).
+        # num_ctx는 Modelfile(32K) 따름.
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": images_b64}],
             "stream": True,
+            "think": False,
             "keep_alive": -1,  # 모델 메모리 영구 상주 — evict 후 재로드 방지
-            "options": {"temperature": 0.2, "num_predict": 8192},
+            "options": {"temperature": 0.1, "num_predict": 4096},
         }
         content_parts: List[str] = []
         thinking_parts: List[str] = []
