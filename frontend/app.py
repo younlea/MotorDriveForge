@@ -418,6 +418,10 @@ def _begin_review(data: dict, files: list) -> None:
     st.session_state._rv_final_partial = {}
     st.session_state._rv_final_logs = []
     st.session_state.chat_history = []
+    # 검증에 제출한 핀맵 보존(결과 디버그 패널·재검증용). 모든 진입점 공용.
+    if data.get("pinmap_csv"):
+        st.session_state.last_submitted_pinmap = data["pinmap_csv"]
+        st.session_state.last_submitted_chip = data.get("chip", "")
     try:
         from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
         ctx = get_script_run_ctx()
@@ -798,7 +802,7 @@ with tab1:
                 "peripherals": st.session_state.confirm_peripherals or "",
             }
             st.session_state.confirm_pinmap_csv = ""  # 확정 단계 종료
-            _begin_review(_data, [])  # 이미지 없이 — Vision 재실행 안 함
+            _begin_review(_data, [])  # 제출 핀맵 보존은 _begin_review가 처리
             st.rerun()
         if col_cancel.button("✖ 취소", use_container_width=True, key="btn_confirm_cancel"):
             st.session_state.confirm_pinmap_csv = ""
@@ -1039,10 +1043,25 @@ with tab1:
 
         # ── 🛠 개발자 디버그 패널 (결과 표시 후에도 유지, 접이식) ──────────────
         fp = st.session_state._rv_final_partial
-        if st.session_state._dev_debug and fp:
+        _submitted = st.session_state.get("last_submitted_pinmap")
+        if st.session_state._dev_debug and (fp or _submitted):
             st.divider()
             st.markdown("### 🛠 개발자 디버그 정보")
             st.caption("결과 표시 후에도 유지되는 중간 단계 입출력. 운영 시 사이드바에서 끄세요.")
+
+            # 검토·수정해 제출한 핀맵 — 잘못 입력 확인 후 수정→재검증
+            if _submitted:
+                with st.expander("✏️ 검토·수정해 제출한 핀맵 (검증 입력값)", expanded=True):
+                    try:
+                        st.dataframe(pd.read_csv(StringIO(_submitted)),
+                                     use_container_width=True, hide_index=True)
+                    except Exception:
+                        st.code(_submitted, language="text")
+                    if st.button("← 이 핀맵 수정하고 다시 검증", key="reopen_confirm_edit"):
+                        st.session_state.confirm_pinmap_csv = _submitted
+                        st.session_state.confirm_chip = st.session_state.get(
+                            "last_submitted_chip", "")
+                        st.rerun()
 
             if fp.get("requirements"):
                 with st.expander("① 인식된 요구사항 (프롬프트 파싱 결과)", expanded=False):
