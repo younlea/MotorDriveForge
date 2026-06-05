@@ -613,8 +613,17 @@ class ReviewAgent:
         warnings: List[str] = []
         family = self._chip_family(requirements.chip or "STM32G474")
 
-        pins = set(pinmap_df["pin"].str.upper().tolist()) if "pin" in pinmap_df.columns else set()
-        functions = set(pinmap_df["function"].str.upper().tolist()) if "function" in pinmap_df.columns else set()
+        # function 컬럼이 전부 비면(Vision이 신호이름만 읽음) pandas가 float(NaN)로 인식 →
+        # .str 접근자가 터짐. 항상 문자열로 변환 후 사용.
+        def _col_set(col: str) -> set:
+            if col not in pinmap_df.columns:
+                return set()
+            return {
+                v for v in pinmap_df[col].fillna("").astype(str).str.upper().str.strip().tolist()
+                if v
+            }
+        pins = _col_set("pin")
+        functions = _col_set("function")
 
         # 1. TIM1/TIM8 핀 충돌
         shared_brk_pins = {"PB0", "PB1"}
@@ -1114,13 +1123,16 @@ Review the MCU pinmap AND the peripherals, then return JSON."""
         requirements: RequirementsDict,
     ) -> Dict[str, Any]:
         """확정 핀 JSON 구조 생성."""
+        def _s(v: Any) -> str:
+            return "" if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v)
+
         pins_list = []
         if "pin" in pinmap_df.columns:
             for _, row in pinmap_df.iterrows():
                 entry: Dict[str, Any] = {
-                    "pin": str(row.get("pin", "")).upper(),
-                    "function": str(row.get("function", "")),
-                    "label": str(row.get("label", "")),
+                    "pin": _s(row.get("pin")).upper(),
+                    "function": _s(row.get("function")),
+                    "label": _s(row.get("label")),
                 }
                 pin_upper = entry["pin"]
                 if pin_upper in self.pin_af_db:
