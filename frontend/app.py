@@ -692,12 +692,12 @@ with tab1:
         st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 라벨/function 채움 "
                    f"{len(_rows)} · function 지정 {_set}")
 
-        with st.expander("고급 — 원본 CSV 직접 편집(행 추가/삭제)", expanded=False):
-            st.caption("여기서 편집한 뒤 아래 체크하면 드롭다운 대신 이 내용으로 검증합니다.")
-            _raw_df = st.data_editor(_base_df, num_rows="dynamic",
-                                     use_container_width=True, key="pinmap_editor_raw")
-            if st.checkbox("이 직접편집(CSV) 내용으로 검증", key="use_raw_csv"):
-                edited_df = _raw_df
+        # 위 드롭다운 편집기가 단일 소스. 검증에 넘어갈 핀맵을 읽기전용으로 미리보기(항상 싱크).
+        with st.expander("검증에 넘길 핀맵 미리보기 (CSV)", expanded=False):
+            if len(edited_df):
+                st.dataframe(edited_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("아직 채워진 핀이 없습니다. 위에서 라벨/function을 지정하세요.")
 
         st.markdown("**연결된 페리페럴 / 외부 부품** (Vision 추출 — 수정 가능)")
         st.session_state.confirm_peripherals = st.text_area(
