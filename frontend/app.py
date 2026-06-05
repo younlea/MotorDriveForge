@@ -646,29 +646,51 @@ with tab1:
             st.warning(f"이 칩({_opts.get('mcu_name') or _chip_now or '?'})의 AF 옵션을 "
                        "못 찾았습니다. 칩 부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
 
+        def _pin_sort_key(p):
+            # PA8 → (0,'A',8); 비표준 핀은 뒤로
+            if len(p) >= 3 and p[0] == "P" and p[1].isalpha() and p[2:].isdigit():
+                return (0, p[1], int(p[2:]))
+            return (1, p, 0)
+
+        # Vision이 판독한 핀 → (label, function)
+        _vision = {}
+        for _, _row in _base_df.iterrows():
+            _p = _clean(_row.get("pin")).upper()
+            if _p:
+                _vision[_p] = (_clean(_row.get("label")), _clean(_row.get("function")))
+
+        # 이 패키지의 전체 핀(AF 옵션=패키지 정확 핀목록 ∪ 판독핀)을 이름순으로.
+        # io맵은 서브패밀리 전체(다른 패키지 핀 포함)라 universe엔 안 넣고 배지에만 쓴다.
+        _universe = set(_pin_opts) | set(_vision)
+        _show_all = st.checkbox(
+            "칩의 모든 핀 표시 (미판독 포함 — OCR 누락·밀림 보정용)",
+            value=True, key="confirm_show_all",
+        )
+        _pin_list = sorted(_universe if _show_all else set(_vision), key=_pin_sort_key)
+
         _hc = st.columns([0.9, 1, 1.6, 2.6])
         _hc[0].markdown("**IO**"); _hc[1].markdown("**핀**")
         _hc[2].markdown("**라벨**"); _hc[3].markdown("**function**")
         _rows = []
-        for _, _row in _base_df.iterrows():
-            pin = _clean(_row.get("pin")).upper()
-            if not pin:
-                continue
-            cur = _clean(_row.get("function"))
+        for pin in _pin_list:
+            _lbl0, cur = _vision.get(pin, ("", ""))
             choices = _fn_choices(pin, cur, _pin_opts, _common)
             c0, c1, c2, c3 = st.columns([0.9, 1, 1.6, 2.6])
             c0.markdown(_io_badge(pin))
             c1.markdown(f"`{pin}`")
-            _lbl = c2.text_input("l", value=_clean(_row.get("label")),
+            _lbl = c2.text_input("l", value=_lbl0,
                                  key=f"clbl_{_chip_now}_{pin}", label_visibility="collapsed")
             _sel = c3.selectbox("f", choices,
                                 index=(choices.index(cur) if cur in choices else 0),
                                 key=f"cfn_{_chip_now}_{pin}", label_visibility="collapsed")
-            _rows.append({"chip": _chip_now, "pin": pin,
-                          "function": "" if _sel == "(미지정)" else _sel, "label": _lbl})
+            _func = "" if _sel == "(미지정)" else _sel
+            # function이나 라벨이 채워진 핀만 핀맵에 포함(빈 핀 80개로 오염 방지)
+            if _func or _lbl:
+                _rows.append({"chip": _chip_now, "pin": pin, "function": _func, "label": _lbl})
         edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "function", "label"])
         _set = sum(1 for r in _rows if r["function"])
-        st.caption(f"핀 {len(_rows)}개 · function 지정 {_set}개")
+        st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 라벨/function 채움 "
+                   f"{len(_rows)} · function 지정 {_set}")
 
         with st.expander("고급 — 원본 CSV 직접 편집(행 추가/삭제)", expanded=False):
             st.caption("여기서 편집한 뒤 아래 체크하면 드롭다운 대신 이 내용으로 검증합니다.")
