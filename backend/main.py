@@ -486,21 +486,22 @@ async def download_ioc(filename: str):
     )
 
 
-# 핀별 function 옵션 — scripts/parse_cubemx_db.py 가 CubeMX DB에서 파생한 파일.
-# (agent/ 는 컨테이너에 복사·마운트되므로 백엔드에서 읽을 수 있다.)
-_PIN_OPTIONS_PATH = Path(__file__).resolve().parent.parent / "agent" / "pin_function_options.json"
-_pin_options_cache: Optional[Dict[str, Any]] = None
+# 핀별 function 옵션 — scripts/parse_cubemx_db.py 가 CubeMX DB에서 파생한 패밀리별 파일.
+# (agent/ 는 컨테이너에 복사·마운트되므로 백엔드에서 읽을 수 있다.) 패밀리(G4/F4/H7..)
+# 단위로 분리돼 있어 필요한 것만 로드한다.
+_PIN_OPTIONS_DIR = Path(__file__).resolve().parent.parent / "agent" / "pin_options"
+_pin_options_cache: Dict[str, Dict[str, Any]] = {}
 
 
-def _load_pin_options() -> Dict[str, Any]:
-    global _pin_options_cache
-    if _pin_options_cache is None:
+def _load_pin_options(family: str) -> Dict[str, Any]:
+    if family not in _pin_options_cache:
+        path = _PIN_OPTIONS_DIR / f"STM32{family}.json"
         try:
-            _pin_options_cache = json.loads(_PIN_OPTIONS_PATH.read_text(encoding="utf-8"))
+            _pin_options_cache[family] = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
-            logger.warning("pin_function_options.json 로드 실패: %s", e)
-            _pin_options_cache = {}
-    return _pin_options_cache
+            logger.warning("pin options 로드 실패 %s: %s", path, e)
+            _pin_options_cache[family] = {}
+    return _pin_options_cache[family]
 
 
 @app.get("/v1/pin-options/{chip}", tags=["Step 2"])
@@ -510,7 +511,8 @@ async def pin_options(chip: str):
     chip은 _chip_identity()로 Mcu.Name(=CubeMX DB 키)으로 정규화해 조회한다.
     """
     ident = _chip_identity(chip)
-    entry = _load_pin_options().get(ident["name"], {})
+    family = ident["name"][5:7]  # STM32 다음 2자 (G4, F4, ...)
+    entry = _load_pin_options(family).get(ident["name"], {})
     return {
         "chip": chip,
         "mcu_name": ident["name"],
