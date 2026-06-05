@@ -825,16 +825,33 @@ with tab1:
         for s in suggestions:
             st.info(f"권장: {s}")
 
-        if not errors and st.session_state.validated_pins:
+        if st.session_state.validated_pins:
             with st.expander("확정 핀 JSON 보기", expanded=False):
                 st.json(st.session_state.validated_pins)
 
-            # Step 2 이동 버튼
+        if not errors and st.session_state.validated_pins:
+            # 오류 없음 → 바로 Step 2
             if st.button(
                 "Step 2: HAL 코드 생성하기 →",
                 type="primary",
                 key="go_to_step2_btn",
                 use_container_width=True,
+            ):
+                st.session_state.go_to_step2 = True
+                st.rerun()
+
+        elif errors and st.session_state.validated_pins:
+            # 오류 있음 — 채팅으로 논의 후 사용자가 판단해서 넘어갈 수 있게
+            st.warning(
+                "오류가 있습니다. 아래 채팅에서 각 오류가 실제 문제인지 확인한 뒤, "
+                "이상이 없다고 판단되면 아래 버튼으로 Step 2를 진행하세요."
+            )
+            if st.button(
+                "오류 확인 완료 — Step 2로 진행 →",
+                type="secondary",
+                key="go_to_step2_override_btn",
+                use_container_width=True,
+                help="채팅에서 오류를 검토한 뒤, 실제 이슈가 없다고 판단될 때만 사용하세요.",
             ):
                 st.session_state.go_to_step2 = True
                 st.rerun()

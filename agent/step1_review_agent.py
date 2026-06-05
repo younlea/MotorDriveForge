@@ -706,12 +706,26 @@ class ReviewAgent:
                             f"DB 등록 기능: {', '.join(valid_funcs)}"
                         )
 
-        # 8. FDCAN 관련
+        # 8. FDCAN 관련 — function(FDCAN1_TX) 또는 label(CAN_TX/CAN_RX)로 인식
         if "fdcan" in requirements.comms:
-            fdcan_pins = [f for f in functions if "FDCAN" in f]
-            if len(fdcan_pins) < 2:
+            fdcan_funcs = [f for f in functions if "FDCAN" in f]
+            # function이 비어 있거나(Vision이 신호이름만 읽음) label로 판단
+            labels: set = _col_set("label") if "label" in pinmap_df.columns else set()
+            can_labels = [
+                lb for lb in labels
+                if any(kw in lb for kw in ("CAN_TX", "CAN_RX", "CANTX", "CANRX",
+                                            "FDCAN_TX", "FDCAN_RX", "CAN TX", "CAN RX"))
+            ]
+            if len(fdcan_funcs) < 2 and len(can_labels) < 2:
                 errors.append(
-                    "FDCAN 핀 부족: FDCAN_TX, FDCAN_RX 최소 2핀 필요."
+                    "FDCAN 핀 부족: FDCAN_TX, FDCAN_RX 최소 2핀 필요. "
+                    "(function에 FDCAN1_TX/RX 또는 label에 CAN_TX/CAN_RX가 있어야 함)"
+                )
+            elif len(fdcan_funcs) < 2 and len(can_labels) >= 2:
+                # label로 확인됐으나 function이 비어 있음 → 경고 수준
+                warnings.append(
+                    f"FDCAN 핀 function 미지정: label({', '.join(can_labels)})로 CAN 핀을 감지했으나 "
+                    "function 컬럼에 FDCAN1_TX/RX가 없습니다. CubeMX 생성 시 AF 설정이 누락될 수 있습니다."
                 )
 
         # 9. SPI EEPROM
