@@ -1001,7 +1001,13 @@ with tab1:
 with tab2:
     st.header("Step 2 — CubeMX HAL 코드 생성")
 
-    if not st.session_state.review_passed:
+    # Step 1에서 이어받을 핀맵이 실제로 있으면 재입력 폼을 띄우지 않는다.
+    # (오류가 있어도 사용자가 '오류 확인 완료'로 넘어온 경우 포함 — review_passed가 아니라
+    #  validated_pins 존재 여부로 판단해야 데이터가 정상적으로 인계된다.)
+    _carried_pins = st.session_state.validated_pins.get("pins") if isinstance(
+        st.session_state.validated_pins, dict) else None
+
+    if not _carried_pins:
         st.info("Step 1 핀 검증을 통과하거나, 핀맵을 직접 입력해 바로 시작할 수 있습니다.")
 
         col_s1_btn, _ = st.columns([1, 2])
@@ -1120,7 +1126,8 @@ with tab2:
                     st.error(f"파싱 오류: {_e}")
     else:
         vp = st.session_state.validated_pins
-        st.success(f"Step 1 통과 — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
+        _src = "Step 1 통과" if st.session_state.review_passed else "Step 1 핀맵 인계(오류 검토 후 진행)"
+        st.success(f"{_src} — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
 
         # ── Step A: .ioc 파일 생성 ────────────────────────────────────────
         st.subheader("Step A — STM32CubeMX 프로젝트 파일(.ioc) 생성")
