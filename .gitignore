@@ -9,6 +9,10 @@ venv/
 # 중간 파싱 결과 (chunks에서 재생성 가능, 불필요하게 큼)
 dataset/parsed_text/
 
+# STM32CubeMX MCU DB raw (~600MB, ST 라이선스 자산). 커밋 금지 —
+# scripts/parse_cubemx_db.py 로 agent/pin_function_options.json만 파생·커밋한다.
+dataset/STM32CubeMX/
+
 # Qdrant 벡터 DB (Docker volume — git으로 관리 안 함, Spark에서 embed_and_index.py 실행)
 qdrant_storage/
 qdrant_snapshots/

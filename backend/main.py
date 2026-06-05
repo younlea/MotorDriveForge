@@ -486,6 +486,42 @@ async def download_ioc(filename: str):
     )
 
 
+# 핀별 function 옵션 — scripts/parse_cubemx_db.py 가 CubeMX DB에서 파생한 파일.
+# (agent/ 는 컨테이너에 복사·마운트되므로 백엔드에서 읽을 수 있다.)
+_PIN_OPTIONS_PATH = Path(__file__).resolve().parent.parent / "agent" / "pin_function_options.json"
+_pin_options_cache: Optional[Dict[str, Any]] = None
+
+
+def _load_pin_options() -> Dict[str, Any]:
+    global _pin_options_cache
+    if _pin_options_cache is None:
+        try:
+            _pin_options_cache = json.loads(_PIN_OPTIONS_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("pin_function_options.json 로드 실패: %s", e)
+            _pin_options_cache = {}
+    return _pin_options_cache
+
+
+@app.get("/v1/pin-options/{chip}", tags=["Step 2"])
+async def pin_options(chip: str):
+    """칩 부품번호 → 핀별 선택 가능한 CubeMX 신호 목록(드롭다운 소스).
+
+    chip은 _chip_identity()로 Mcu.Name(=CubeMX DB 키)으로 정규화해 조회한다.
+    """
+    ident = _chip_identity(chip)
+    entry = _load_pin_options().get(ident["name"], {})
+    return {
+        "chip": chip,
+        "mcu_name": ident["name"],
+        "package": entry.get("package"),
+        "found": bool(entry),
+        "pins": entry.get("pins", {}),
+        # GPIO/아날로그는 Signal이 아니라 Mode로 설정되지만, 드롭다운 편의를 위해 제공
+        "common": ["GPIO_Output", "GPIO_Input", "GPIO_Analog"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # CubeMX CLI 유틸리티
 # ---------------------------------------------------------------------------

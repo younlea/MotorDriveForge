@@ -1129,6 +1129,67 @@ with tab2:
         _src = "Step 1 통과" if st.session_state.review_passed else "Step 1 핀맵 인계(오류 검토 후 진행)"
         st.success(f"{_src} — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
 
+        # ── 핀 function 지정 (CubeMX AF 드롭다운) ─────────────────────────
+        # function이 비면 .ioc에 신호가 안 들어가므로(라벨만), 핀별 AF에서 선택하게 한다.
+        def _get_pin_options(_chip: str) -> dict:
+            _cache = st.session_state.setdefault("_pin_opts_cache", {})
+            if _chip not in _cache:
+                try:
+                    _r = requests.get(f"{BACKEND_URL}/v1/pin-options/{_chip}", timeout=10)
+                    _cache[_chip] = _r.json() if _r.status_code == 200 else {}
+                except Exception:
+                    _cache[_chip] = {}
+            return _cache[_chip]
+
+        _opts = _get_pin_options(vp.get("chip", ""))
+        _pin_opts = _opts.get("pins", {})
+        _common = _opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
+        _vpins = vp.get("pins", [])
+        _missing = sum(1 for p in _vpins if (p.get("pin") or "").strip()
+                       and not (p.get("function") or "").strip())
+        with st.expander(f"🔧 핀 function 지정 — 미지정 {_missing}개 (드롭다운 선택)",
+                         expanded=_missing > 0):
+            if not _opts.get("found"):
+                st.warning(
+                    f"이 칩({_opts.get('mcu_name', '?')})의 AF 옵션을 찾지 못했습니다. "
+                    "백엔드에 agent/pin_function_options.json이 있는지, 부품번호가 맞는지 확인하세요."
+                )
+            st.caption(
+                "ENBL→TIMx_CHy(PWM), 전류센스/포텐셔미터→ADCx_INy, 엔코더→TIMx_CHy, "
+                "DIR/nFAULT→GPIO_Output, 입력→GPIO_Input. 빈 핀은 그대로 두면 됩니다."
+            )
+            with st.form("fn_assign_form"):
+                _hc = st.columns([1.2, 2, 3])
+                _hc[0].markdown("**핀**"); _hc[1].markdown("**라벨**"); _hc[2].markdown("**function**")
+                for p in _vpins:
+                    pin = (p.get("pin") or "").strip().upper()
+                    if not pin:
+                        continue
+                    cur = (p.get("function") or "").strip()
+                    opts = _pin_opts.get(pin, [])
+                    choices = ["(미지정)"] + opts + [c for c in _common if c not in opts]
+                    if cur and cur not in choices:
+                        choices.insert(1, cur)  # 기존 값(예: SWDIO/FDCAN) 보존
+                    c1, c2, c3 = st.columns([1.2, 2, 3])
+                    c1.markdown(f"`{pin}`")
+                    c2.caption(p.get("label", "") or "—")
+                    c3.selectbox(
+                        "fn", choices, index=(choices.index(cur) if cur in choices else 0),
+                        key=f"fn_{pin}", label_visibility="collapsed",
+                    )
+                _applied = st.form_submit_button("이 function으로 적용 →", type="primary",
+                                                 use_container_width=True)
+            if _applied:
+                for p in _vpins:
+                    pin = (p.get("pin") or "").strip().upper()
+                    if not pin:
+                        continue
+                    _sel = st.session_state.get(f"fn_{pin}", "(미지정)")
+                    p["function"] = "" if _sel == "(미지정)" else _sel
+                st.session_state.validated_pins["pins"] = _vpins
+                st.session_state.ioc_result = None  # 변경됐으니 .ioc 재생성 유도
+                st.success("function 적용 완료 — 아래에서 .ioc를 다시 생성하세요.")
+
         # ── Step A: .ioc 파일 생성 ────────────────────────────────────────
         st.subheader("Step A — STM32CubeMX 프로젝트 파일(.ioc) 생성")
         st.caption(
