@@ -25,7 +25,7 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from io import StringIO
+from io import BytesIO, StringIO
 
 _paste_comp = components.declare_component(
     "paste_image",
@@ -219,6 +219,51 @@ def _suggest_function(label: str, pin: str, pin_opts: dict) -> str:
     if re.search(r"FAULT|FLT|nINT|_INT\b|ALERT|RDY|READY|DIAG|\bPG\b|nOC", lab):
         return "GPIO_Input"
     return ""
+
+
+def _build_pinmap_xlsx(rows: list, pin_opts: dict, common: list) -> bytes:
+    """HW 공유용 Excel — IO/Pin/Label/Function + 핀별 AF 전체 나열 + Function 드롭다운.
+
+    Function 셀은 그 핀의 AF 옵션(숨김 시트 참조)으로 데이터검증 드롭다운을 건다(토글 선택).
+    맨 오른쪽엔 AF 전체를 텍스트로 나열(참고용). rows: [{io,pin,label,function}, ...] (전체 핀).
+    """
+    import xlsxwriter
+    from xlsxwriter.utility import xl_col_to_name
+
+    buf = BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    ws = wb.add_worksheet("pinmap")
+    src = wb.add_worksheet("AF_options")  # 드롭다운 소스(숨김)
+    src.hide()
+    hdr = wb.add_format({"bold": True, "bg_color": "#D9E1F2", "border": 1})
+    wrap = wb.add_format({"text_wrap": True, "valign": "top"})
+
+    for c, h in enumerate(["IO", "Pin", "Label", "Function", "AF 전체 (선택지)"]):
+        ws.write(0, c, h, hdr)
+    ws.set_column(0, 0, 7); ws.set_column(1, 1, 7); ws.set_column(2, 2, 18)
+    ws.set_column(3, 3, 24); ws.set_column(4, 4, 70)
+    ws.freeze_panes(1, 0)
+
+    for r, row in enumerate(rows, start=1):
+        pin = str(row.get("pin", ""))
+        af = list(pin_opts.get(pin, []))
+        opts = af + [c for c in common if c not in af]
+        ws.write(r, 0, row.get("io", ""))
+        ws.write(r, 1, pin)
+        ws.write(r, 2, row.get("label", ""))
+        ws.write(r, 3, row.get("function", ""))
+        ws.write(r, 4, ", ".join(af), wrap)
+        if opts:
+            col = r - 1
+            for i, o in enumerate(opts):
+                src.write(i, col, o)
+            cl = xl_col_to_name(col)
+            ws.data_validation(r, 3, r, 3, {
+                "validate": "list",
+                "source": f"=AF_options!${cl}$1:${cl}${len(opts)}",
+            })
+    wb.close()
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +592,15 @@ with tab1:
                         uploaded.seek(0)
                         st.dataframe(df.head(10), use_container_width=True)
                         st.caption(f"총 {len(df)}개 핀")
+                        if st.button("📋 이 CSV로 검토(드롭다운) 화면 열기",
+                                     key="load_csv_confirm", use_container_width=True,
+                                     help="저장해 둔 핀맵을 불러와 IO·AF 드롭다운으로 다시 검토합니다."):
+                            uploaded.seek(0)
+                            st.session_state.confirm_pinmap_csv = uploaded.read().decode("utf-8-sig")
+                            _c = (str(df["chip"].iloc[0]).strip()
+                                  if "chip" in df.columns and len(df) else "")
+                            st.session_state.confirm_chip = _c or ("" if chip == AUTO_CHIP else chip)
+                            st.rerun()
                     except Exception as e:
                         st.error(f"CSV 파싱 오류: {e}")
             else:
@@ -691,14 +745,15 @@ with tab1:
         _common = _opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
         _io_map = _opts.get("io", {})
 
+        def _io_text(pin: str) -> str:
+            """I/O structure 텍스트(CSV/Excel용) — FT(5V) / TT(3.6V)."""
+            code = _io_map.get(pin, "")
+            return "FT" if code.startswith("FT") else "TT" if code.startswith("TT") else ""
+
         def _io_badge(pin: str) -> str:
             """I/O structure 배지 — FT(5V)=초록, TT(3.6V)=주황."""
-            code = _io_map.get(pin, "")
-            if code.startswith("FT"):
-                return ":green[**FT**] 5V"
-            if code.startswith("TT"):
-                return ":orange[**TT**] 3V3"
-            return ":gray[—]"
+            t = _io_text(pin)
+            return ":green[**FT**] 5V" if t == "FT" else ":orange[**TT**] 3V3" if t == "TT" else ":gray[—]"
 
         def _clean(v):
             v = "" if v is None else str(v).strip()
@@ -740,7 +795,8 @@ with tab1:
         _hc = st.columns([0.9, 1, 1.6, 2.6])
         _hc[0].markdown("**IO**"); _hc[1].markdown("**핀**")
         _hc[2].markdown("**라벨**"); _hc[3].markdown("**function**")
-        _rows = []
+        _rows = []        # 채워진 핀만(검증/CSV용)
+        _all_rows = []     # 표시된 전체 핀(Excel 참고용)
         _suggested = 0
         for pin in _pin_list:
             _lbl0, cur = _vision.get(pin, ("", ""))
@@ -758,10 +814,13 @@ with tab1:
                                 index=(choices.index(cur) if cur in choices else 0),
                                 key=f"cfn_{_chip_now}_{pin}", label_visibility="collapsed")
             _func = "" if _sel == "(미지정)" else _sel
+            _io = _io_text(pin)
+            _all_rows.append({"io": _io, "pin": pin, "label": _lbl, "function": _func})
             # function이나 라벨이 채워진 핀만 핀맵에 포함(빈 핀 80개로 오염 방지)
             if _func or _lbl:
-                _rows.append({"chip": _chip_now, "pin": pin, "function": _func, "label": _lbl})
-        edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "function", "label"])
+                _rows.append({"chip": _chip_now, "pin": pin, "io": _io,
+                              "label": _lbl, "function": _func})
+        edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "io", "label", "function"])
         _set = sum(1 for r in _rows if r["function"])
         st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 자동추정 {_suggested} · "
                    f"function 지정 {_set} (⚠️ 추정값은 검토·수정하세요)")
@@ -772,6 +831,29 @@ with tab1:
                 st.dataframe(edited_df, use_container_width=True, hide_index=True)
             else:
                 st.caption("아직 채워진 핀이 없습니다. 위에서 라벨/function을 지정하세요.")
+
+        # ── 내보내기: CSV(재업로드용) + Excel(HW 공유 — AF 전체 + 드롭다운) ──
+        _dl1, _dl2 = st.columns(2)
+        _fname = (_chip_now or "pinmap").replace("(", "").replace(")", "")
+        _dl1.download_button(
+            "⬇ 핀맵 CSV 저장 (재업로드용)",
+            data=edited_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{_fname}_pinmap.csv", mime="text/csv",
+            use_container_width=True, key="dl_csv",
+            help="이 CSV를 보관했다가 나중에 이미지와 함께 다시 업로드해 검토할 수 있습니다.",
+        )
+        try:
+            _xlsx = _build_pinmap_xlsx(_all_rows, _pin_opts, _common)
+            _dl2.download_button(
+                "⬇ HW 공유용 Excel (AF 전체 + 드롭다운)",
+                data=_xlsx,
+                file_name=f"{_fname}_pinmap.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="dl_xlsx",
+                help="Function 셀은 그 핀의 AF에서 토글 선택, 맨 오른쪽 열에 AF 전체 나열.",
+            )
+        except Exception as _e:
+            _dl2.caption(f"Excel 생성 불가: {_e}")
 
         st.markdown("**연결된 페리페럴 / 외부 부품** (Vision 추출 — 수정 가능)")
         st.session_state.confirm_peripherals = st.text_area(
