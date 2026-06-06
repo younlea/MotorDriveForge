@@ -1146,6 +1146,9 @@ def _build_ioc_content(
             continue                      # 리셋핀은 설정 대상 아님 — .ioc에서 제외
         mcu_pins.append(disp)
         if label:
+            # GPIO_Label만 쓰면 안 되고 GPIOParameters에 선언해야 한다(실제 CubeMX 형식).
+            # 빠지면 GPIO 파라미터 리스트가 비어 BGA 렌더링에서 GBall get(0) 크래시.
+            props[f"{disp}.GPIOParameters"] = "GPIO_Label"
             props[f"{disp}.GPIO_Label"] = label
         fu = func.upper()
         # BGA에서 모드 해석 실패 → 크래시하는 케이스를 사전에 GPIO로 안전 강등:
