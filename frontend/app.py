@@ -221,49 +221,143 @@ def _suggest_function(label: str, pin: str, pin_opts: dict) -> str:
     return ""
 
 
-def _build_pinmap_xlsx(rows: list, pin_opts: dict, common: list) -> bytes:
-    """HW 공유용 Excel — IO/Pin/Label/Function + 핀별 AF 전체 나열 + Function 드롭다운.
+def _build_pinmap_xlsx(mcu_groups: list) -> bytes:
+    """HW 공유용 Excel — MCU별 탭. 각 탭: IO/Pin/Label/Function + AF 전체 나열 + Function 드롭다운.
 
-    Function 셀은 그 핀의 AF 옵션(숨김 시트 참조)으로 데이터검증 드롭다운을 건다(토글 선택).
-    맨 오른쪽엔 AF 전체를 텍스트로 나열(참고용). rows: [{io,pin,label,function}, ...] (전체 핀).
+    Function 셀은 그 핀의 AF 옵션(숨김 시트 참조)으로 데이터검증 드롭다운(토글 선택).
+    mcu_groups: [{"mcu","chip","rows":[{io,pin,label,function}],"pin_opts":{},"common":[]}].
     """
     import xlsxwriter
     from xlsxwriter.utility import xl_col_to_name
 
     buf = BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
-    ws = wb.add_worksheet("pinmap")
-    src = wb.add_worksheet("AF_options")  # 드롭다운 소스(숨김)
-    src.hide()
     hdr = wb.add_format({"bold": True, "bg_color": "#D9E1F2", "border": 1})
     wrap = wb.add_format({"text_wrap": True, "valign": "top"})
+    used = set()
 
-    for c, h in enumerate(["IO", "Pin", "Label", "Function", "AF 전체 (선택지)"]):
-        ws.write(0, c, h, hdr)
-    ws.set_column(0, 0, 7); ws.set_column(1, 1, 7); ws.set_column(2, 2, 18)
-    ws.set_column(3, 3, 24); ws.set_column(4, 4, 70)
-    ws.freeze_panes(1, 0)
-
-    for r, row in enumerate(rows, start=1):
-        pin = str(row.get("pin", ""))
-        af = list(pin_opts.get(pin, []))
-        opts = af + [c for c in common if c not in af]
-        ws.write(r, 0, row.get("io", ""))
-        ws.write(r, 1, pin)
-        ws.write(r, 2, row.get("label", ""))
-        ws.write(r, 3, row.get("function", ""))
-        ws.write(r, 4, ", ".join(af), wrap)
-        if opts:
-            col = r - 1
-            for i, o in enumerate(opts):
-                src.write(i, col, o)
-            cl = xl_col_to_name(col)
-            ws.data_validation(r, 3, r, 3, {
-                "validate": "list",
-                "source": f"=AF_options!${cl}$1:${cl}${len(opts)}",
-            })
+    for gi, g in enumerate(mcu_groups):
+        # 시트명: MCU 지정자(+칩). Excel 시트명 31자 제한·중복 회피.
+        name = (f"{g.get('mcu','MCU')} {g.get('chip','')}".strip() or f"MCU{gi+1}")[:28]
+        nm, k = name, 1
+        while nm.lower() in used:
+            k += 1; nm = f"{name[:25]}_{k}"
+        used.add(nm.lower())
+        ws = wb.add_worksheet(nm)
+        src = wb.add_worksheet(f"_af{gi}")  # 드롭다운 소스(숨김)
+        src.hide()
+        for c, h in enumerate(["IO", "Pin", "Label", "Function", "AF 전체 (선택지)"]):
+            ws.write(0, c, h, hdr)
+        ws.set_column(0, 0, 7); ws.set_column(1, 1, 7); ws.set_column(2, 2, 18)
+        ws.set_column(3, 3, 24); ws.set_column(4, 4, 70)
+        ws.freeze_panes(1, 0)
+        pin_opts = g.get("pin_opts", {})
+        common = g.get("common", [])
+        for r, row in enumerate(g.get("rows", []), start=1):
+            pin = str(row.get("pin", ""))
+            af = list(pin_opts.get(pin, []))
+            opts = af + [c for c in common if c not in af]
+            ws.write(r, 0, row.get("io", "")); ws.write(r, 1, pin)
+            ws.write(r, 2, row.get("label", "")); ws.write(r, 3, row.get("function", ""))
+            ws.write(r, 4, ", ".join(af), wrap)
+            if opts:
+                col = r - 1
+                for i, o in enumerate(opts):
+                    src.write(i, col, o)
+                cl = xl_col_to_name(col)
+                ws.data_validation(r, 3, r, 3, {
+                    "validate": "list",
+                    "source": f"=_af{gi}!${cl}$1:${cl}${len(opts)}",
+                })
     wb.close()
     return buf.getvalue()
+
+
+def _dominant_str(vals: list) -> str:
+    """가장 많이 등장한 비어있지 않은 값."""
+    vals = [v for v in vals if v]
+    return max(set(vals), key=vals.count) if vals else ""
+
+
+def _mcu_groups_from_df(df, default_chip: str):
+    """확정 핀맵 DF → (is_multi, [{mcu, chip, vision:{pin:(label,func)}}]). mcu 컬럼 기준."""
+    def clean(v):
+        s = "" if v is None else str(v).strip()
+        return "" if s.lower() == "nan" else s
+    has_mcu = "mcu" in df.columns
+    recs = []
+    for _, r in df.iterrows():
+        pin = clean(r.get("pin")).upper()
+        if not pin:
+            continue
+        recs.append((clean(r.get("mcu")).upper() if has_mcu else "",
+                     clean(r.get("chip")), pin, clean(r.get("label")), clean(r.get("function"))))
+    distinct = sorted({m for m, *_ in recs if m})
+    multi = len(distinct) > 1
+    order = distinct if multi else [distinct[0] if distinct else "U1"]
+    groups = []
+    for m in order:
+        sub = [r for r in recs if (r[0] == m or (not multi))]
+        chip = _dominant_str([r[1] for r in sub]) or default_chip
+        groups.append({"mcu": m, "chip": chip,
+                       "vision": {r[2]: (r[3], r[4]) for r in sub}})
+    return multi, groups
+
+
+def _render_mcu_section(mcu: str, chip: str, vision_rows: dict,
+                        show_all: bool, auto_fn: bool, ns: str):
+    """한 MCU 핀맵 편집 UI 렌더 → (rows_filled, rows_all, pin_opts, common).
+
+    vision_rows: {pin:(label,function)}. ns: 위젯 key 네임스페이스(MCU별 고유).
+    """
+    opts = _fetch_pin_options(chip)
+    pin_opts = opts.get("pins", {})
+    common = opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
+    io_map = opts.get("io", {})
+
+    def io_text(p):
+        c = io_map.get(p, "")
+        return "FT" if c.startswith("FT") else "TT" if c.startswith("TT") else ""
+
+    def io_badge(p):
+        t = io_text(p)
+        return ":green[**FT**] 5V" if t == "FT" else ":orange[**TT**] 3V3" if t == "TT" else ":gray[—]"
+
+    def sort_key(p):
+        if len(p) >= 3 and p[0] == "P" and p[1].isalpha() and p[2:].isdigit():
+            return (0, p[1], int(p[2:]))
+        return (1, p, 0)
+
+    if not opts.get("found"):
+        st.warning(f"칩 {chip or '?'}({opts.get('mcu_name') or '?'})의 AF 옵션을 못 찾았습니다. "
+                   "부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
+
+    universe = set(pin_opts) | set(vision_rows)
+    pin_list = sorted(universe if show_all else set(vision_rows), key=sort_key)
+    hc = st.columns([0.9, 1, 1.6, 2.6])
+    hc[0].markdown("**IO**"); hc[1].markdown("**핀**")
+    hc[2].markdown("**라벨**"); hc[3].markdown("**function**")
+    rows, all_rows, suggested = [], [], 0
+    for pin in pin_list:
+        lbl0, cur = vision_rows.get(pin, ("", ""))
+        if not cur and auto_fn:
+            cur = _suggest_function(lbl0, pin, pin_opts)
+            if cur:
+                suggested += 1
+        choices = _fn_choices(pin, cur, pin_opts, common)
+        c0, c1, c2, c3 = st.columns([0.9, 1, 1.6, 2.6])
+        c0.markdown(io_badge(pin)); c1.markdown(f"`{pin}`")
+        lbl = c2.text_input("l", value=lbl0, key=f"clbl_{ns}_{pin}", label_visibility="collapsed")
+        sel = c3.selectbox("f", choices, index=(choices.index(cur) if cur in choices else 0),
+                           key=f"cfn_{ns}_{pin}", label_visibility="collapsed")
+        func = "" if sel == "(미지정)" else sel
+        io = io_text(pin)
+        all_rows.append({"mcu": mcu, "chip": chip, "io": io, "pin": pin, "label": lbl, "function": func})
+        if func or lbl:
+            rows.append({"mcu": mcu, "chip": chip, "pin": pin, "io": io, "label": lbl, "function": func})
+    st.caption(f"{('['+mcu+'] ') if mcu else ''}표시 {len(pin_list)}핀 · 판독 {len(vision_rows)} · "
+               f"자동추정 {suggested} · function {sum(1 for r in rows if r['function'])}")
+    return rows, all_rows, pin_opts, common
 
 
 # ---------------------------------------------------------------------------
@@ -726,132 +820,77 @@ with tab1:
     elif in_confirm:
         st.markdown("### ✅ 추출된 핀맵 검토 · 수정")
         st.caption("Vision이 회로도에서 추출한 결과입니다. 오인식(예: OSC 핀)을 바로잡고 검증하세요.")
-        st.session_state.confirm_chip = st.text_input(
-            "칩 (Vision 감지값 — 필요시 수정)",
-            value=st.session_state.confirm_chip or "",
-            placeholder="예: STM32G431RBI6",
-        )
         try:
             _base_df = pd.read_csv(StringIO(st.session_state.confirm_pinmap_csv))
         except Exception:
-            _base_df = pd.DataFrame(columns=["chip", "pin", "function", "label"])
+            _base_df = pd.DataFrame(columns=["mcu", "chip", "pin", "function", "label"])
+        _base_df.columns = [str(c).strip().lower() for c in _base_df.columns]
         for _c in ["chip", "pin", "function", "label"]:
             if _c not in _base_df.columns:
                 _base_df[_c] = ""
 
-        _chip_now = (st.session_state.confirm_chip or "").strip()
-        _opts = _fetch_pin_options(_chip_now)
-        _pin_opts = _opts.get("pins", {})
-        _common = _opts.get("common", ["GPIO_Output", "GPIO_Input", "GPIO_Analog"])
-        _io_map = _opts.get("io", {})
+        _multi, _mcu_groups = _mcu_groups_from_df(_base_df, (st.session_state.confirm_chip or "").strip())
 
-        def _io_text(pin: str) -> str:
-            """I/O structure 텍스트(CSV/Excel용) — FT(5V) / TT(3.6V)."""
-            code = _io_map.get(pin, "")
-            return "FT" if code.startswith("FT") else "TT" if code.startswith("TT") else ""
-
-        def _io_badge(pin: str) -> str:
-            """I/O structure 배지 — FT(5V)=초록, TT(3.6V)=주황."""
-            t = _io_text(pin)
-            return ":green[**FT**] 5V" if t == "FT" else ":orange[**TT**] 3V3" if t == "TT" else ":gray[—]"
-
-        def _clean(v):
-            v = "" if v is None else str(v).strip()
-            return "" if v.lower() == "nan" else v
-
-        st.markdown("**핀별 function 지정** — AF 드롭다운에서 선택 (ENBL→TIMx_CHy, "
-                    "전류센스/포텐셔미터→ADCx_INy, 엔코더→TIMx_CHy, DIR/nFAULT→GPIO_Output)")
-        if not _opts.get("found"):
-            st.warning(f"이 칩({_opts.get('mcu_name') or _chip_now or '?'})의 AF 옵션을 "
-                       "못 찾았습니다. 칩 부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
-
-        def _pin_sort_key(p):
-            # PA8 → (0,'A',8); 비표준 핀은 뒤로
-            if len(p) >= 3 and p[0] == "P" and p[1].isalpha() and p[2:].isdigit():
-                return (0, p[1], int(p[2:]))
-            return (1, p, 0)
-
-        # Vision이 판독한 핀 → (label, function)
-        _vision = {}
-        for _, _row in _base_df.iterrows():
-            _p = _clean(_row.get("pin")).upper()
-            if _p:
-                _vision[_p] = (_clean(_row.get("label")), _clean(_row.get("function")))
-
-        # 이 패키지의 전체 핀(AF 옵션=패키지 정확 핀목록 ∪ 판독핀)을 이름순으로.
-        # io맵은 서브패밀리 전체(다른 패키지 핀 포함)라 universe엔 안 넣고 배지에만 쓴다.
-        _universe = set(_pin_opts) | set(_vision)
         _cc = st.columns(2)
         _show_all = _cc[0].checkbox(
             "칩의 모든 핀 표시 (미판독 포함 — OCR 누락·밀림 보정용)",
-            value=True, key="confirm_show_all",
-        )
+            value=True, key="confirm_show_all")
         _auto_fn = _cc[1].checkbox(
-            "라벨로 function 자동 추정 (검토 후 수정)",
-            value=True, key="confirm_auto_fn",
-        )
-        _pin_list = sorted(_universe if _show_all else set(_vision), key=_pin_sort_key)
+            "라벨로 function 자동 추정 (검토 후 수정)", value=True, key="confirm_auto_fn")
+        if _multi:
+            st.info("🧩 MCU " + str(len(_mcu_groups)) + "개 감지 — "
+                    + ", ".join(f"{g['mcu']}={g['chip'] or '?'}" for g in _mcu_groups))
 
-        _hc = st.columns([0.9, 1, 1.6, 2.6])
-        _hc[0].markdown("**IO**"); _hc[1].markdown("**핀**")
-        _hc[2].markdown("**라벨**"); _hc[3].markdown("**function**")
-        _rows = []        # 채워진 핀만(검증/CSV용)
-        _all_rows = []     # 표시된 전체 핀(Excel 참고용)
-        _suggested = 0
-        for pin in _pin_list:
-            _lbl0, cur = _vision.get(pin, ("", ""))
-            if not cur and _auto_fn:
-                cur = _suggest_function(_lbl0, pin, _pin_opts)  # 라벨→추정(검토용)
-                if cur:
-                    _suggested += 1
-            choices = _fn_choices(pin, cur, _pin_opts, _common)
-            c0, c1, c2, c3 = st.columns([0.9, 1, 1.6, 2.6])
-            c0.markdown(_io_badge(pin))
-            c1.markdown(f"`{pin}`")
-            _lbl = c2.text_input("l", value=_lbl0,
-                                 key=f"clbl_{_chip_now}_{pin}", label_visibility="collapsed")
-            _sel = c3.selectbox("f", choices,
-                                index=(choices.index(cur) if cur in choices else 0),
-                                key=f"cfn_{_chip_now}_{pin}", label_visibility="collapsed")
-            _func = "" if _sel == "(미지정)" else _sel
-            _io = _io_text(pin)
-            _all_rows.append({"io": _io, "pin": pin, "label": _lbl, "function": _func})
-            # function이나 라벨이 채워진 핀만 핀맵에 포함(빈 핀 80개로 오염 방지)
-            if _func or _lbl:
-                _rows.append({"chip": _chip_now, "pin": pin, "io": _io,
-                              "label": _lbl, "function": _func})
-        edited_df = pd.DataFrame(_rows, columns=["chip", "pin", "io", "label", "function"])
-        _set = sum(1 for r in _rows if r["function"])
-        st.caption(f"표시 {len(_pin_list)}핀 · 판독 {len(_vision)} · 자동추정 {_suggested} · "
-                   f"function 지정 {_set} (⚠️ 추정값은 검토·수정하세요)")
+        st.markdown("**핀별 function 지정** — AF 드롭다운에서 선택 (ENBL→TIMx_CHy, "
+                    "전류센스/포텐셔미터→ADCx_INy, 엔코더→TIMx_CHy, DIR/nFAULT→GPIO_Output, "
+                    "⚠️ 자동추정은 검토·수정)")
 
-        # 위 드롭다운 편집기가 단일 소스. 검증에 넘어갈 핀맵을 읽기전용으로 미리보기(항상 싱크).
+        _all_filled, _xlsx_groups = [], []
+        _primary_chip = ""
+        for _g in _mcu_groups:
+            if _multi:
+                st.markdown(f"#### 🧩 {_g['mcu']} — {_g['chip'] or '(칩 미상)'}")
+                _chip_g = st.text_input(f"칩 ({_g['mcu']})", value=_g["chip"],
+                                        key=f"confirm_chip_{_g['mcu']}").strip()
+            else:
+                _chip_g = st.text_input("칩 (Vision 감지값 — 필요시 수정)",
+                                        value=st.session_state.confirm_chip or _g["chip"],
+                                        placeholder="예: STM32G431RBI6",
+                                        key="confirm_chip_single").strip()
+                st.session_state.confirm_chip = _chip_g
+            if not _primary_chip:
+                _primary_chip = _chip_g
+            _rows, _arows, _pin_opts, _common = _render_mcu_section(
+                _g["mcu"], _chip_g, _g["vision"], _show_all, _auto_fn, ns=f"{_g['mcu']}_{_chip_g}")
+            _all_filled += _rows
+            _xlsx_groups.append({"mcu": _g["mcu"], "chip": _chip_g, "rows": _arows,
+                                 "pin_opts": _pin_opts, "common": _common})
+
+        edited_df = pd.DataFrame(_all_filled, columns=["mcu", "chip", "pin", "io", "label", "function"])
+
         with st.expander("검증에 넘길 핀맵 미리보기 (CSV)", expanded=False):
             if len(edited_df):
                 st.dataframe(edited_df, use_container_width=True, hide_index=True)
             else:
                 st.caption("아직 채워진 핀이 없습니다. 위에서 라벨/function을 지정하세요.")
 
-        # ── 내보내기: CSV(재업로드용) + Excel(HW 공유 — AF 전체 + 드롭다운) ──
+        # ── 내보내기: CSV(재업로드용) + Excel(MCU별 탭 · AF 전체 + 드롭다운) ──
         _dl1, _dl2 = st.columns(2)
-        _fname = (_chip_now or "pinmap").replace("(", "").replace(")", "")
+        _fname = (_primary_chip or "pinmap").replace("(", "").replace(")", "") or "pinmap"
         _dl1.download_button(
             "⬇ 핀맵 CSV 저장 (재업로드용)",
             data=edited_df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{_fname}_pinmap.csv", mime="text/csv",
             use_container_width=True, key="dl_csv",
-            help="이 CSV를 보관했다가 나중에 이미지와 함께 다시 업로드해 검토할 수 있습니다.",
-        )
+            help="이 CSV를 보관했다가 나중에 이미지와 함께 다시 업로드해 검토할 수 있습니다.")
         try:
-            _xlsx = _build_pinmap_xlsx(_all_rows, _pin_opts, _common)
+            _xlsx = _build_pinmap_xlsx(_xlsx_groups)
             _dl2.download_button(
-                "⬇ HW 공유용 Excel (AF 전체 + 드롭다운)",
-                data=_xlsx,
-                file_name=f"{_fname}_pinmap.xlsx",
+                "⬇ HW 공유용 Excel (MCU별 탭 · AF 전체 + 드롭다운)",
+                data=_xlsx, file_name=f"{_fname}_pinmap.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True, key="dl_xlsx",
-                help="Function 셀은 그 핀의 AF에서 토글 선택, 맨 오른쪽 열에 AF 전체 나열.",
-            )
+                help="MCU마다 시트 분리. Function 셀은 그 핀 AF에서 토글 선택, 맨 오른쪽에 AF 전체 나열.")
         except Exception as _e:
             _dl2.caption(f"Excel 생성 불가: {_e}")
 
@@ -871,9 +910,10 @@ with tab1:
 
         col_go, col_cancel = st.columns([3, 1])
         if col_go.button("② 검증 실행 (확정된 핀맵)", type="primary", use_container_width=True, key="btn_confirm_review"):
-            _chip = (st.session_state.confirm_chip or "").strip()
+            # 다중 MCU면 칩은 핀맵 CSV의 chip 컬럼이 권위. request.chip은 대표값(첫 MCU).
+            _chip = (st.session_state.confirm_chip or "").strip() or _primary_chip
             if not _chip:
-                st.error("칩을 입력하세요 (자동 감지 실패 시 직접 입력).")
+                st.error("칩을 입력하세요 (자동 감지 실패 시 각 MCU 칩을 입력).")
                 st.stop()
             _data = {
                 "chip": _chip,
@@ -1395,9 +1435,23 @@ with tab2:
                 except Exception as _e:
                     st.error(f"파싱 오류: {_e}")
     else:
-        vp = st.session_state.validated_pins
-        _src = "Step 1 통과" if st.session_state.review_passed else "Step 1 핀맵 인계(오류 검토 후 진행)"
-        st.success(f"{_src} — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
+        _vpall = st.session_state.validated_pins
+        _mcus = _vpall.get("mcus") if isinstance(_vpall, dict) else None
+        _mcus = _mcus or []
+        if len(_mcus) > 1:
+            # 다중 MCU — 토글로 선택, 선택한 MCU의 .ioc를 생성한다.
+            _labels = [f"{m.get('mcu','MCU')} · {m.get('chip','?')} ({len(m.get('pins', []))}핀)"
+                       for m in _mcus]
+            _sel_i = st.radio("🧩 MCU 선택 — 이 MCU의 .ioc를 생성합니다",
+                              list(range(len(_mcus))), format_func=lambda i: _labels[i],
+                              horizontal=True, key="step2_mcu_sel")
+            vp = _mcus[_sel_i]  # validated_pins["mcus"][i] 참조 — 수정 시 그대로 반영
+            st.success(f"선택: {vp.get('mcu')} — 칩 {vp.get('chip','?')}, 핀 {len(vp.get('pins', []))}개 "
+                       f"(전체 {len(_mcus)}개 MCU)")
+        else:
+            vp = _mcus[0] if _mcus else _vpall
+            _src = "Step 1 통과" if st.session_state.review_passed else "Step 1 핀맵 인계(오류 검토 후 진행)"
+            st.success(f"{_src} — 칩: {vp.get('chip', '?')}, 핀 수: {len(vp.get('pins', []))}")
 
         # ── 핀 function 지정 (CubeMX AF 드롭다운) ─────────────────────────
         # function이 비면 .ioc에 신호가 안 들어가므로(라벨만), 핀별 AF에서 선택하게 한다.
@@ -1456,7 +1510,7 @@ with tab2:
                         continue
                     _sel = st.session_state.get(f"fn_{pin}", "(미지정)")
                     p["function"] = "" if _sel == "(미지정)" else _sel
-                st.session_state.validated_pins["pins"] = _vpins
+                vp["pins"] = _vpins  # 선택된 MCU 그룹에 반영(다중 MCU 안전)
                 st.session_state.ioc_result = None  # 변경됐으니 .ioc 재생성 유도
                 st.success("function 적용 완료 — 아래에서 .ioc를 다시 생성하세요.")
 
