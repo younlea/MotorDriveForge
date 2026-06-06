@@ -702,6 +702,34 @@ class ReviewAgent:
                     setattr(req, k, v)
         return req
 
+    def _comprehensive_af(self, chip: str) -> Dict[str, set]:
+        """칩의 완전한 핀→AF 집합. CubeMX DB 파생 agent/pin_options/STM32<fam>.json에서
+        서브패밀리 전체를 union (AF mux는 패키지 무관 동일). 빈약한 DEFAULT_PIN_AF 대신
+        AF 검증에 사용 — 핀당 1개만 알던 문제로 올바른 function을 오경고하던 것을 해소."""
+        chip = (chip or "").upper().strip()
+        if not chip.startswith("STM32G4"):
+            chip = "STM32G474"  # 현재 G4 데이터만 보유 → 폴백
+        sub = chip[:9]   # STM32G431
+        fam = chip[5:7]  # G4
+        cache = getattr(self, "_af_cache", None)
+        if cache is None:
+            cache = self._af_cache = {}
+        if sub in cache:
+            return cache[sub]
+        path = os.path.join(os.path.dirname(__file__), "pin_options", f"STM32{fam}.json")
+        union: Dict[str, set] = {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            for refname, entry in data.items():
+                if refname.startswith(sub):
+                    for pin, afs in entry.get("pins", {}).items():
+                        union.setdefault(pin.upper(), set()).update(a.upper() for a in afs)
+        except Exception as e:
+            logger.warning("comprehensive AF 로드 실패(%s): %s", path, e)
+        cache[sub] = union
+        return union
+
     def validate_pins_rules(
         self,
         pinmap_df: pd.DataFrame,
@@ -724,16 +752,20 @@ class ReviewAgent:
         pins = _col_set("pin")
         functions = _col_set("function")
 
-        # 1. TIM1/TIM8 핀 충돌
-        shared_brk_pins = {"PB0", "PB1"}
-        if shared_brk_pins & pins:
-            tim1_funcs = {f for f in functions if "TIM1" in f}
-            tim8_funcs = {f for f in functions if "TIM8" in f}
-            if tim1_funcs and tim8_funcs:
-                errors.append(
-                    "TIM1/TIM8 핀 충돌: PB0/PB1은 TIM1_CH2N/CH3N과 TIM8_CH2N/CH3N AF가 겹칩니다. "
-                    "두 타이머를 동시에 상보 출력으로 사용하려면 별도 핀을 배정하세요."
-                )
+        # 1. 핀 중복 배정 — 같은 핀에 서로 다른 function이 2개 이상 (진짜 충돌)
+        if "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
+            _pin_funcs: Dict[str, set] = {}
+            for _, _row in pinmap_df.iterrows():
+                _p = str(_row.get("pin", "")).upper().strip()
+                _f = str(_row.get("function", "")).upper().strip()
+                if _p and _f and _f not in ("NAN", "NONE"):
+                    _pin_funcs.setdefault(_p, set()).add(_f)
+            for _p, _fs in sorted(_pin_funcs.items()):
+                if len(_fs) > 1:
+                    errors.append(
+                        f"핀 중복 배정: {_p}에 {', '.join(sorted(_fs))}가 동시에 할당됨 — "
+                        "한 핀은 한 기능만 가능합니다."
+                    )
 
         # 2. OPAMP 수 초과
         opamp_max = OPAMP_MAX.get(family, 6)
@@ -790,20 +822,25 @@ class ReviewAgent:
                 "백그라운드 태스크를 최소화하세요."
             )
 
-        # 7. 핀 AF 기본 검증
-        if "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
+        # 7. 핀 AF 검증 — CubeMX DB 파생 완전 AF로 검증(핀별 전체 기능 목록).
+        #    GPIO_*/SYS_*/RCC_*는 AF mux 표에 없는 특수 신호라 검증 제외(오경고 방지).
+        af_db = self._comprehensive_af(requirements.chip)
+        if af_db and "pin" in pinmap_df.columns and "function" in pinmap_df.columns:
             for _, row in pinmap_df.iterrows():
-                pin = str(row["pin"]).upper()
+                pin = str(row["pin"]).upper().strip()
                 func = str(row["function"]).upper().strip()
-                if func in ("", "NAN", "NONE", "GPIO"):
-                    continue  # function 미지정(Vision이 신호이름만 읽은 경우)은 AF 검증 생략
-                if pin in self.pin_af_db:
-                    valid_funcs = list(self.pin_af_db[pin].keys())
-                    if func not in valid_funcs and not func.startswith("ADC") and not func.startswith("DAC"):
-                        warnings.append(
-                            f"핀 AF 미확인: {pin} — {func}. "
-                            f"DB 등록 기능: {', '.join(valid_funcs)}"
-                        )
+                if (func in ("", "NAN", "NONE")
+                        or func.startswith(("GPIO", "SYS", "RCC"))):
+                    continue
+                valid = af_db.get(pin)
+                if valid is None:
+                    continue  # 데이터 없는 핀(패키지 외 등)은 경고하지 않음
+                if func not in valid:
+                    _sample = ", ".join(sorted(valid)[:10])
+                    warnings.append(
+                        f"핀 AF 불가: {pin}에 {func}는 이 칩에서 불가능합니다. "
+                        f"가능한 AF: {_sample}{' …' if len(valid) > 10 else ''}"
+                    )
 
         # 8. FDCAN 관련 — function(FDCAN1_TX) 또는 label(CAN_TX/CAN_RX)로 인식
         if "fdcan" in requirements.comms:
