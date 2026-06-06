@@ -1815,10 +1815,26 @@ with tab3:
         "multi_axis_sync": "multi_axis_sync — 다축 동기화",
     }
 
-    # ── 핀맵 확보 (Step 1 결과 or 직접 입력) ─────────────────────────────────
-    vp3: Optional[Dict[str, Any]] = (
+    # ── 핀맵 확보 (Step 1 결과 or 직접 입력). 다중 MCU여도 MCU 하나씩 처리(토글 선택). ──
+    _vp3all: Optional[Dict[str, Any]] = (
         st.session_state.validated_pins if st.session_state.review_passed else None
     )
+    vp3: Optional[Dict[str, Any]] = _vp3all
+
+    if _vp3all:
+        _mcus3 = (_vp3all.get("mcus") if isinstance(_vp3all, dict) else None) or []
+        if len(_mcus3) > 1:
+            _labels3 = [f"{m.get('mcu', 'MCU')} · {m.get('chip', '?')} ({len(m.get('pins', []))}핀)"
+                        for m in _mcus3]
+            _i3 = st.radio("🧩 MCU 선택 — 이 MCU의 알고리즘을 생성합니다 (MCU별 1개씩)",
+                           list(range(len(_mcus3))), format_func=lambda i: _labels3[i],
+                           horizontal=True, key="step3_mcu_sel")
+            vp3 = _mcus3[_i3]
+            st.success(f"선택: {vp3.get('mcu')} — 칩 {vp3.get('chip', '?')}, "
+                       f"핀 {len(vp3.get('pins', []))}개 (전체 {len(_mcus3)}개 MCU)")
+        else:
+            vp3 = _mcus3[0] if _mcus3 else _vp3all
+            st.success(f"핀맵 확보 — 칩: {vp3.get('chip', '?')}, 핀 수: {len(vp3.get('pins', []))}")
 
     if not vp3:
         st.info("Step 1 결과가 없습니다. 아래에서 핀맵을 직접 입력하거나 JSON을 업로드하세요.")
@@ -1852,8 +1868,6 @@ with tab3:
                     st.session_state.validated_pins = vp3
                     st.session_state.review_passed = True
                     st.rerun()
-    else:
-        st.success(f"핀맵 확보 — 칩: {vp3.get('chip','?')}, 핀 수: {len(vp3.get('pins',[]))}")
 
     st.divider()
 
