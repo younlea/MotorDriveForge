@@ -1130,6 +1130,10 @@ def _build_ioc_content(
         label = str(p.get("label", "")).strip()
         if not pin or pin in seen_pins:
             continue
+        # 기능(function) 미지정 핀은 .ioc에서 제외 — 라벨만 있고 Signal 없는 핀이
+        # Mcu.PinN에 들어가면 CubeMX가 모드를 못 찾아 BGA 렌더링에서 크래시한다.
+        if not func or func.upper() in ("NAN", "NONE", "GPIO"):
+            continue
         seen_pins.add(pin)
         disp = names.get(pin, pin)        # CubeMX 풀네임 (PF0-OSC_IN 등)
         if disp.endswith("-NRST"):
@@ -1137,8 +1141,6 @@ def _build_ioc_content(
         mcu_pins.append(disp)
         if label:
             props[f"{disp}.GPIO_Label"] = label
-        if not func or func.upper() in ("NAN", "NONE", "GPIO"):
-            continue
         fu = func.upper()
         # BGA에서 모드 해석 실패 → 크래시하는 케이스를 사전에 GPIO로 안전 강등:
         #  ① SYS 특수신호(SYS_WKUP 등, SWD/JTAG 제외)  ② 동일 신호 중복(같은 채널 두 핀)

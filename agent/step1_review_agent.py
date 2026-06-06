@@ -767,6 +767,21 @@ class ReviewAgent:
                         "한 핀은 한 기능만 가능합니다."
                     )
 
+            # 1b. 같은 신호(채널)를 2개 이상 핀에 배정 — 예: TIM1_CH1을 PA8·PC0에 동시.
+            #     한 타이머 채널/통신 신호는 한 핀만 가능. (GPIO/ADC 아날로그는 제외)
+            _func_pins: Dict[str, list] = {}
+            for _, _row in pinmap_df.iterrows():
+                _p = str(_row.get("pin", "")).upper().strip()
+                _f = str(_row.get("function", "")).upper().strip()
+                if (_p and _f and not _f.startswith(("GPIO", "ADC", "NAN", "NONE", "SYS", "RCC"))):
+                    _func_pins.setdefault(_f, []).append(_p)
+            for _f, _ps in sorted(_func_pins.items()):
+                if len(set(_ps)) > 1:
+                    errors.append(
+                        f"신호 중복 배정: {_f}가 {', '.join(sorted(set(_ps)))}에 동시에 할당됨 — "
+                        "한 채널/신호는 한 핀에만 연결할 수 있습니다. 하나만 남기고 다른 기능으로 바꾸세요."
+                    )
+
         # 2. OPAMP 수 초과
         opamp_max = OPAMP_MAX.get(family, 6)
         opamp_funcs = [f for f in functions if "OPAMP" in f and "VOUT" in f]
