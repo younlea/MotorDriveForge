@@ -35,19 +35,23 @@ def _tag(e):
 def parse_mcu(path):
     root = ET.parse(path).getroot()
     pins = {}
+    names = {}  # 줄임이름 → CubeMX 풀네임 (PF0 → PF0-OSC_IN). .ioc는 풀네임을 써야 한다.
     for pin in root:
         if _tag(pin) != "Pin" or pin.get("Type") != "I/O":
             continue
-        name = pin.get("Name", "").split("-")[0].split("/")[0].strip()  # "PA0-OSC.." → "PA0"
+        full = pin.get("Name", "").strip()            # "PF0-OSC_IN"
+        name = full.split("-")[0].split("/")[0].strip()  # "PF0"
         if not name.startswith("P"):
             continue
+        if full != name:
+            names[name] = full
         sigs = sorted({
             s.get("Name") for s in pin
             if _tag(s) == "Signal" and s.get("Name") and s.get("Name") not in _SKIP
         })
         if sigs:
             pins[name] = sigs
-    return root.get("RefName"), root.get("Package"), pins
+    return root.get("RefName"), root.get("Package"), pins, names
 
 
 def main():
@@ -57,11 +61,14 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     by_family = defaultdict(dict)
     for f in files:
-        ref, pkg, pins = parse_mcu(f)
+        ref, pkg, pins, names = parse_mcu(f)
         if not ref or not pins or not ref.startswith("STM32"):
             continue
         fam = ref[5:7]  # G4, F4, H7, U5, MP ...
-        by_family[fam][ref] = {"package": pkg, "pins": pins}
+        entry = {"package": pkg, "pins": pins}
+        if names:
+            entry["names"] = names  # 특수핀 풀네임 (PF0→PF0-OSC_IN) — .ioc 생성용
+        by_family[fam][ref] = entry
 
     total = 0
     for fam, db in sorted(by_family.items()):

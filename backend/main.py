@@ -561,6 +561,13 @@ _PIN_IO_PATH = Path(__file__).resolve().parent.parent / "agent" / "pin_io_struct
 _pin_io_cache: Optional[Dict[str, Any]] = None
 
 
+def _pin_name_map(chip: str) -> Dict[str, str]:
+    """칩의 특수핀 줄임이름 → CubeMX 풀네임 (PF0 → PF0-OSC_IN). .ioc 생성용."""
+    ident = _chip_identity(chip)
+    fam = ident["name"][5:7]
+    return _load_pin_options(fam).get(ident["name"], {}).get("names", {})
+
+
 def _load_pin_io(mcu_name: str) -> Dict[str, str]:
     """mcu_name(예: STM32G431R(6-8-B)Ix) → 핀 I/O structure 맵.
     서브패밀리(STM32G431) 우선, 없으면 패밀리(STM32G4) 폴백."""
@@ -1107,6 +1114,8 @@ def _build_ioc_content(
 
     # 3) 핀 신호 주입 — 주변장치별로 모아 모드까지 자동 합성한다.
     #    VP_SYS 가상핀(Systick/DBSignals)을 항상 먼저 둔다 (스켈레톤이 보유).
+    #    특수핀은 CubeMX 풀네임을 써야 한다(PF0→PF0-OSC_IN). 안 그러면 BGA에서 볼 매칭 실패로 크래시.
+    names = _pin_name_map(chip)
     mcu_pins: List[str] = ["VP_SYS_VS_Systick", "VP_SYS_VS_DBSignals"]
     seen_pins: set = set()
     periph: Dict[str, List[tuple]] = {}  # 인스턴스(TIM1..) → [(pin, signal, label)]
@@ -1117,16 +1126,24 @@ def _build_ioc_content(
         if not pin or pin in seen_pins:
             continue
         seen_pins.add(pin)
-        mcu_pins.append(pin)
+        disp = names.get(pin, pin)        # CubeMX 풀네임 (PF0-OSC_IN 등)
+        if disp.endswith("-NRST"):
+            continue                      # 리셋핀은 설정 대상 아님 — .ioc에서 제외
+        mcu_pins.append(disp)
         if label:
-            props[f"{pin}.GPIO_Label"] = label
+            props[f"{disp}.GPIO_Label"] = label
         if not func or func.upper() in ("NAN", "NONE", "GPIO"):
             continue
-        props[f"{pin}.Signal"] = _pin_signal_value(func)  # TIM은 S_ 접두
-        props[f"{pin}.Locked"] = "true"
+        props[f"{disp}.Signal"] = _pin_signal_value(func)  # TIM은 S_ 접두
+        props[f"{disp}.Locked"] = "true"
+        _fu = func.upper()
+        if _fu in ("RCC_OSC_IN", "RCC_OSC_OUT"):
+            props[f"{disp}.Mode"] = "HSE-External-Oscillator"
+        elif _fu in ("RCC_OSC32_IN", "RCC_OSC32_OUT"):
+            props[f"{disp}.Mode"] = "LSE-External-Oscillator"
         ip = _peripheral_of(func)
         if ip:
-            periph.setdefault(ip, []).append((pin, func, label))
+            periph.setdefault(ip, []).append((disp, func, label))
 
     for i, mp in enumerate(mcu_pins):
         props[f"Mcu.Pin{i}"] = mp
