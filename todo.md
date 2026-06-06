@@ -1,8 +1,31 @@
 # TODO — STM32G4 Motor Drive Agent
 
-최종 업데이트: 2026-05-14
+최종 업데이트: 2026-06-06
 
 > **안내:** 단기 최우선 과제(Task 01~06) 및 상세 작업 우선순위는 [`tasks/README.md`](./tasks/README.md)에서 별도로 관리되고 있습니다. 본 `todo.md`는 전체 프로젝트의 거시적 진행 상황과 인프라 설정 작업을 주로 추적합니다.
+
+---
+
+## ✅ 완료 (2026-06-06 세션)
+
+**Step 1 — HW 검증**
+- [x] Vision 백그라운드 추출(블로킹 폐기 버그 해결), CSV 우선 + Vision 페리페럴 분담
+- [x] 확정 편집기: 전체 핀 이름순 + IO(FT/TT) 배지 + AF 드롭다운(CubeMX DB 파생)
+- [x] 라벨→function 자동추정 + 확정 매핑 누적 학습(`/v1/label-hints`)
+- [x] Rule Engine: 완전 AF 검증(오경고 제거), 핀/신호 중복, 모터 미가정 기본값
+- [x] 다중 MCU(같은 칩 N개 포함) — `mcu` 지정자 그룹핑, MCU별 검증
+- [x] 핀맵 CSV/Excel(MCU별 탭) 내보내기 + 재업로드
+
+**Step 2 — .ioc 생성 (신규 가동, LQFP·UFBGA 검증)**
+- [x] `_build_ioc_content` — 스켈레톤 + 부품번호 디코드 식별자 + 주변장치 자동 합성
+- [x] CubeMX 로드 크래시 6종 해결(parseInt, CurrentBGAView, 특수핀 풀네임, GPIOParameters,
+      function없는핀/고아주변장치 강등, SH 매핑) — 메모리 `project_ioc_template_based` 참조
+- [x] CubeMX DB(db/mcu/*.xml) → `agent/pin_options/`, 데이터시트 → `agent/pin_io_structure.json`
+
+**다음 작업**
+- [ ] **Step 3 — Golden Module 적응을 다중 MCU·최신 핀맵에 연동** (현재 flat 핀맵 기준)
+- [ ] (선택) .ioc RCC 기본을 보수적(16MHz HSI)으로 — G431 USB/RNG 클럭 경고 정리
+- [ ] 동시 사용자: 전역 상태(`_review_partial`) 요청별 분리 (동시 검증 충돌 방지)
 
 ---
 

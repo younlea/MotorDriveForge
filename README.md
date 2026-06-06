@@ -32,6 +32,28 @@ STM32G4 전용 사내 Agent 시스템 — 회로도 입력부터 완성 펌웨�
 
 ---
 
+## 진행 현황 (2026-06-06 갱신)
+
+### ✅ Step 1 — HW 검증 (가동)
+- Vision(Gemma 4 31B)으로 회로도 → 핀맵 추출. **백그라운드 실행**(블로킹 폐기 문제 해결).
+- **CSV 업로드 우선** + Vision은 페리페럴/분석 담당(둘 다 있으면 CSV가 핀맵, Vision이 페리페럴).
+- 확정 편집기: **칩의 전체 핀을 이름순**으로 + 핀별 **IO(FT/TT) 배지** + **AF 드롭다운**(CubeMX DB 파생).
+  - **라벨→function 자동 추정**(검토 후 수정) + **확정 매핑 누적 학습**(`/v1/label-hints`).
+- Rule Engine: AF 검증을 **완전한 CubeMX AF**로(빈약한 내장표 오경고 제거), 핀·신호(채널) 중복,
+  JTAG 핀 재사용(경고), 모터 미가정(control_type 기본 unspecified — 명시될 때만 FOC/3상).
+- **다중 MCU**(같은 칩 N개 포함) — `mcu` 지정자로 그룹핑, MCU별 검증.
+- 핀맵 **CSV/Excel(MCU별 탭·AF 전체+드롭다운) 내보내기 + 재업로드**.
+
+### ✅ Step 2 — CubeMX .ioc 생성 (가동, BGA 포함)
+- `_build_ioc_content`: 깡통 스켈레톤 + 부품번호 디코드 식별자 + 핀/주변장치 자동 합성
+  (TIM PWM/엔코더, ADC 채널, SPI, FDCAN, GPIO). **LQFP·UFBGA 모두 CubeMX 로드 검증**.
+- MCU별 `.ioc` 생성(Step 2에서 MCU 토글 선택).
+
+### ⏳ Step 3 — 알고리즘 통합 (다음 작업)
+- Golden Module 적응 골격은 있음. **다중 MCU·최신 핀맵 연동 정리 필요.**
+
+---
+
 ## 디렉토리 구조
 
 ```

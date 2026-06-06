@@ -48,9 +48,20 @@ A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
 - `mode=fast`: Rule Engine만 실행, ERROR 즉시 반환 (CI/자동검증용)
 - `mode=full` (기본): A→B→C 전체 실행, ERROR 있어도 LLM이 자연어 설명 작성
 
-### 5. Step 2는 LLM 호출 금지
+### 5. Step 2는 LLM 호출 금지 (✅ .ioc 생성 구현 완료)
 - CubeMX 자동화는 결정론적 영역. LLM 끼면 디버깅 지옥.
 - `.ioc` 편집, CLI 실행, 스니펫 주입, 패키징 — 모두 스크립트로만.
+- **`backend/main.py::_build_ioc_content`** 가 핵심: 검증된 깡통 스켈레톤(`_STATIC_IOC`)에
+  식별자·핀·주변장치를 주입. 부품번호 디코드(`_chip_identity`)로 `Mcu.Name/CPN/Package` 생성.
+- **CubeMX 로드 함정(특히 BGA/UFBGA) — 다 잡음. 새 칩/케이스 작업 시 깨지기 쉬우니 주의:**
+  1. 필수 필드 누락 → `parseInt("")` 크래시. MxDb.Version은 설치 툴(현 DB.6.0.170)에 맞출 것.
+  2. BGA는 `PinOutPanel.CurrentBGAView=Top` 필수.
+  3. 특수핀은 풀네임(`PF0-OSC_IN`, `PG10-NRST`)으로. NRST는 제외. `agent/pin_options`의 `names` 맵.
+  4. 모든 라벨 핀은 `GPIOParameters=GPIO_Label` 동반 필수(없으면 BGA `GBall` 크래시).
+  5. function 없는 핀·고아 주변장치(SCK없는 SPI)·중복 채널·SYS_WKUP은 GPIO로 강등/제외.
+  6. TIM 메인채널은 `S_` 접두(`S_TIM1_CH1`) + `SH.<sig>.0/ConfNb` 동반.
+  자세히는 [[project_ioc_template_based]] [[project_cubemx_db_pinoptions]] 메모리.
+- **다중 MCU**: 핀맵 `mcu` 지정자 컬럼으로 그룹핑, MCU별 .ioc 생성. [[project_multi_mcu]]
 
 ### 6. Step 3는 Golden Module 우선
 - 검증된 C/H 레퍼런스(`golden_modules/`)에서 **검색** → **사용자 pinmap에 적응** → **USER CODE 마커 사이 주입**
@@ -63,23 +74,26 @@ A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
 ```
 MotorDriveForge/
 ├── agent/
-│   └── step1_review_agent.py      # ⭐ Step 1 핵심: A→B→C 오케스트레이션
+│   ├── step1_review_agent.py      # ⭐ Step 1 핵심: A→B→C 오케스트레이션 + Rule Engine
+│   ├── step3_codegen_agent.py     # Step 3 Golden Module 적응
+│   ├── pin_options/               # 🆕 칩별 핀 AF 옵션(CubeMX DB 파생, 22패밀리) — 드롭다운·검증·.ioc
+│   └── pin_io_structure.json      # 🆕 핀 FT/TT(5V내성) — 데이터시트 파생
 ├── backend/
-│   └── main.py                     # FastAPI: /v1/review (mode 파라미터 추가 필요)
+│   └── main.py                     # FastAPI: /v1/review, /v1/extract-pinmap,
+│                                   #   /v1/generate-ioc(⭐_build_ioc_content), /v1/pin-options,
+│                                   #   /v1/label-hints, /v1/generate-code, /v1/generate-step3
 ├── golden_modules/                 # ⭐ Step 3 RAG 소스 (검증된 C/H)
 │   ├── dc_motor_pid.{c,h}
 │   ├── multi_axis_sync.{c,h}
 │   ├── bldc_6step_hall.{c,h}
 │   └── fdcan_motor_cmd.{c,h}
 ├── scripts/                        # 오프라인 데이터 인제스천
-│   ├── parse_pdfs.py
-│   ├── chunk_docs.py
-│   ├── embed_and_index.py
-│   ├── build_bm25.py
-│   ├── parse_cubemx_xml.py
-│   ├── parse_opensource_code.py
-│   ├── scrape_st_forum.py
+│   ├── parse_pdfs.py / chunk_docs.py / embed_and_index.py / build_bm25.py
+│   ├── parse_cubemx_db.py          # 🆕 CubeMX db/mcu/*.xml → agent/pin_options/ (핀 AF·풀네임)
+│   ├── parse_datasheet_io.py       # 🆕 ST 데이터시트 → agent/pin_io_structure.json (FT/TT)
+│   ├── parse_opensource_code.py / scrape_st_forum.py
 │   └── scrape_ti_e2e.py            # 🆕 TODO
+│   # ※ dataset/STM32CubeMX/ (raw CubeMX DB ~600MB)는 .gitignore — 파생 JSON만 커밋
 ├── dataset/
 │   ├── official_docs/              # ST PDFs (✅ 14건)
 │   ├── official_docs/errata/       # 🆕 G4 errata 명시적 분리

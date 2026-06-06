@@ -139,6 +139,27 @@ flowchart LR
 
 ---
 
+## Step 2 상세 — .ioc 생성 (결정론, LLM 없음)
+
+```
+확정 핀맵(mcu,chip,pin,io,label,function)
+      │  ── 부품번호 디코드 → Mcu.Name/CPN/Package (_chip_identity)
+      ↓
+깡통 스켈레톤(_STATIC_IOC) + 식별자 주입
+      │  ── 핀 신호 주입 (특수핀 풀네임, GPIOParameters, 중복/고아/SYS → GPIO 강등)
+      │  ── 주변장치 자동 합성: TIM PWM/엔코더, ADC 채널, SPI, FDCAN, GPIO
+      ↓
+.ioc (CubeMX 로드 검증: LQFP·UFBGA)  ── 다중 MCU면 MCU별 1파일
+      ↓
+(CubeMX CLI headless 설치 시) → HAL 코드 ZIP
+```
+
+- 핵심: `backend/main.py::_build_ioc_content`. 핀 AF/풀네임/IO 데이터는 `agent/pin_options/`,
+  `agent/pin_io_structure.json`(CubeMX DB·데이터시트 파생). 프론트 드롭다운도 동일 소스(`/v1/pin-options`).
+- **BGA(UFBGA) 로드 함정**이 많아 깨지기 쉬움 — CLAUDE.md "Step 2" 항목 + 메모리 참조.
+
+---
+
 ## 운영 모드 2가지
 
 | 모드 | 트리거 | LLM 호출 | 사용처 |
