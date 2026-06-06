@@ -153,6 +153,47 @@ def _fetch_pin_options(chip: str) -> dict:
     return cache.get(chip, {})
 
 
+def _fetch_label_hints() -> dict:
+    """백엔드의 누적 학습된 라벨→function 매핑(정규화 라벨 → 최빈 function). 세션 캐시."""
+    if "_label_hints" not in st.session_state:
+        try:
+            r = requests.get(f"{BACKEND_URL}/v1/label-hints", timeout=10)
+            st.session_state._label_hints = r.json().get("hints", {}) if r.status_code == 200 else {}
+        except Exception:
+            st.session_state._label_hints = {}
+    return st.session_state._label_hints
+
+
+def _normalize_label(label: str) -> str:
+    """백엔드 _normalize_label와 동일 — ENBL_1→ENBL, POTENTIO5_2→POTENTIO."""
+    s = re.sub(r"[^A-Z0-9_]", "", (label or "").upper().strip())
+    s = re.sub(r"_?\d+$", "", s)
+    s = re.sub(r"\d+$", "", s)
+    return s.strip("_")
+
+
+def _resolve_to_pin(target: str, opts: list) -> str:
+    """학습된 function(target)을 이 핀의 실제 AF로 매칭. 정확히 있으면 그대로, 없으면 동일 계열."""
+    if not target:
+        return ""
+    if target in opts or target.startswith("GPIO"):
+        return target
+    pat = None
+    if re.match(r"TIM\d+_(CH\d+|ETR)$", target):
+        pat = r"TIM\d+_CH\d+$"
+    elif target.startswith("ADC"):
+        pat = r"ADC\d+_IN\d+"
+    else:
+        m = re.match(r"([A-Z]+)\d+_(.+)$", target)  # SPI1_SCK, FDCAN1_TX, I2C1_SCL ...
+        if m:
+            pat = rf"{m.group(1)}\d+_{re.escape(m.group(2))}"
+    if pat:
+        hit = next((o for o in opts if re.match(pat, o)), None)
+        if hit:
+            return hit
+    return ""
+
+
 def _fn_choices(pin: str, cur: str, pin_opts: dict, common: list) -> list:
     """한 핀의 드롭다운 선택지: (미지정) + 핀 AF + GPIO + 기존값 보존."""
     opts = pin_opts.get(pin, [])
@@ -162,15 +203,24 @@ def _fn_choices(pin: str, cur: str, pin_opts: dict, common: list) -> list:
     return choices
 
 
-def _suggest_function(label: str, pin: str, pin_opts: dict) -> str:
+def _suggest_function(label: str, pin: str, pin_opts: dict, hints: dict = None) -> str:
     """라벨에서 function 추정 — 그 핀에서 실제 가능한 AF 중에서 고른다(추정값, 검토용).
 
-    매칭 안 되면 "" 반환(미지정). 통신/디버그처럼 명확한 것부터, 모호하면 비움.
+    1순위: 누적 학습된 라벨→function(hints)을 이 핀 AF로 매칭. 2순위: 내장 휴리스틱 규칙.
+    매칭 안 되면 "" 반환(미지정).
     """
     opts = pin_opts.get(pin, [])
     lab = (label or "").upper()
     if not lab:
         return ""
+
+    # 1순위 — 사용자 확정 이력(학습)에서 같은 라벨이 매핑한 function을 이 핀 AF로 해석
+    if hints:
+        learned = hints.get(_normalize_label(label))
+        if learned:
+            resolved = _resolve_to_pin(learned, opts)
+            if resolved:
+                return resolved
 
     def pick(pat: str) -> Optional[str]:
         rx = re.compile(pat)
@@ -332,6 +382,7 @@ def _render_mcu_section(mcu: str, chip: str, vision_rows: dict,
         st.warning(f"칩 {chip or '?'}({opts.get('mcu_name') or '?'})의 AF 옵션을 못 찾았습니다. "
                    "부품번호를 확인하세요. (드롭다운은 GPIO만 표시)")
 
+    hints = _fetch_label_hints()
     universe = set(pin_opts) | set(vision_rows)
     pin_list = sorted(universe if show_all else set(vision_rows), key=sort_key)
     hc = st.columns([0.9, 1, 1.6, 2.6])
@@ -341,7 +392,7 @@ def _render_mcu_section(mcu: str, chip: str, vision_rows: dict,
     for pin in pin_list:
         lbl0, cur = vision_rows.get(pin, ("", ""))
         if not cur and auto_fn:
-            cur = _suggest_function(lbl0, pin, pin_opts)
+            cur = _suggest_function(lbl0, pin, pin_opts, hints)
             if cur:
                 suggested += 1
         choices = _fn_choices(pin, cur, pin_opts, common)
@@ -561,6 +612,7 @@ def _begin_review(data: dict, files: list) -> None:
     if data.get("pinmap_csv"):
         st.session_state.last_submitted_pinmap = data["pinmap_csv"]
         st.session_state.last_submitted_chip = data.get("chip", "")
+        st.session_state.pop("_label_hints", None)  # 제출→학습 갱신되니 힌트 캐시 무효화
     try:
         from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
         ctx = get_script_run_ctx()
@@ -837,6 +889,11 @@ with tab1:
             value=True, key="confirm_show_all")
         _auto_fn = _cc[1].checkbox(
             "라벨로 function 자동 추정 (검토 후 수정)", value=True, key="confirm_auto_fn")
+        if _auto_fn:
+            _nhints = len(_fetch_label_hints())
+            if _nhints:
+                st.caption(f"📚 누적 학습된 라벨 {_nhints}개를 자동추정에 우선 반영 중 "
+                           "(확정·검증할 때마다 라벨→AF 매핑이 쌓입니다)")
         if _multi:
             st.info("🧩 MCU " + str(len(_mcu_groups)) + "개 감지 — "
                     + ", ".join(f"{g['mcu']}={g['chip'] or '?'}" for g in _mcu_groups))

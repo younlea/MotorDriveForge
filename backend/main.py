@@ -10,6 +10,7 @@ FastAPI 백엔드 — STM32G4 Motor Drive Agent
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import json
 import logging
@@ -123,6 +124,54 @@ def _save_review_to_disk(partial: Dict[str, Any], chip: str, status: str = "comp
         json.dump(payload, f, ensure_ascii=False, indent=2)
     logger.info("결과 저장: %s", fname.name)
     return fname
+
+
+# ── 라벨→function 학습 저장소 ────────────────────────────────────────────────
+# 사용자가 확정한 (net label → CubeMX function) 매핑을 누적해, 이후 Vision 라벨을
+# AF에 자동 매칭할 때 참고한다. 같은 파트는 네이밍이 비슷해 점점 정확해진다.
+_LABEL_HINTS_PATH = REVIEW_RESULTS_DIR / "label_hints.json"
+
+
+def _normalize_label(label: str) -> str:
+    """라벨 정규화 — 대문자화 + 끝의 인스턴스 번호 제거(ENBL_1→ENBL, POTENTIO5_2→POTENTIO)."""
+    s = re.sub(r"[^A-Z0-9_]", "", (label or "").upper().strip())
+    s = re.sub(r"_?\d+$", "", s)   # 끝 _N / N
+    s = re.sub(r"\d+$", "", s)     # POTENTIO5 → POTENTIO
+    return s.strip("_")
+
+
+def _load_label_hints() -> Dict[str, Dict[str, int]]:
+    try:
+        return json.loads(_LABEL_HINTS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _record_label_hints(pinmap_csv: str) -> None:
+    """확정 핀맵 CSV에서 (정규화 라벨 → function) 빈도를 누적 기록."""
+    if not pinmap_csv or not pinmap_csv.strip():
+        return
+    try:
+        reader = csv.DictReader(io.StringIO(pinmap_csv))
+        fields = {(f or "").strip().lower(): f for f in (reader.fieldnames or [])}
+        if "label" not in fields or "function" not in fields:
+            return
+        hints = _load_label_hints()
+        changed = False
+        for row in reader:
+            lbl = _normalize_label(str(row.get(fields["label"]) or ""))
+            fn = str(row.get(fields["function"]) or "").strip()
+            if not lbl or not fn or fn.upper() in ("NAN", "NONE", "GPIO"):
+                continue
+            hints.setdefault(lbl, {})
+            hints[lbl][fn] = hints[lbl].get(fn, 0) + 1
+            changed = True
+        if changed:
+            _LABEL_HINTS_PATH.write_text(
+                json.dumps(hints, ensure_ascii=False), encoding="utf-8")
+            logger.info("label hints 업데이트: %d개 라벨", len(hints))
+    except Exception as e:
+        logger.warning("label hints 기록 실패: %s", e)
 
 
 def get_agent() -> ReviewAgent:
@@ -425,6 +474,8 @@ def review(
     # fast 모드: errors 있으면 403 (CI 게이트)
     # full 모드: errors 있어도 200 (LLM 자연어 설명 포함)
     _save_review_to_disk(_review_partial, chip, status="completed")
+    # 사용자 확정 핀맵의 (라벨→function) 매핑 학습 (직접 CSV가 있을 때만 — Vision 추출 단계 제외)
+    _record_label_hints(csv_text)
 
     if report.errors and mode == "fast":
         return JSONResponse(
@@ -543,6 +594,14 @@ async def pin_options(chip: str):
         # 핀별 I/O structure (FT=5V내성 / TT=3.6V). 데이터시트 파생. 서브패밀리 우선.
         "io": _load_pin_io(ident["name"]),
     }
+
+
+@app.get("/v1/label-hints", tags=["Step 1"])
+async def label_hints():
+    """누적 학습된 (정규화 라벨 → 최빈 function) 매핑. 프론트 자동추정에서 우선 참고."""
+    raw = _load_label_hints()
+    best = {lbl: max(fns, key=fns.get) for lbl, fns in raw.items() if fns}
+    return {"hints": best, "count": len(best), "raw": raw}
 
 
 # ---------------------------------------------------------------------------
