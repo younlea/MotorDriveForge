@@ -1122,6 +1122,7 @@ def _build_ioc_content(
     names = _pin_name_map(chip)
     mcu_pins: List[str] = ["VP_SYS_VS_Systick", "VP_SYS_VS_DBSignals"]
     seen_pins: set = set()
+    used_sigs: set = set()  # 이미 쓴 신호(중복=채널 충돌 검출용)
     periph: Dict[str, List[tuple]] = {}  # 인스턴스(TIM1..) → [(pin, signal, label)]
     for p in pins:
         pin = str(p.get("pin", "")).strip().upper()
@@ -1138,12 +1139,20 @@ def _build_ioc_content(
             props[f"{disp}.GPIO_Label"] = label
         if not func or func.upper() in ("NAN", "NONE", "GPIO"):
             continue
+        fu = func.upper()
+        # BGA에서 모드 해석 실패 → 크래시하는 케이스를 사전에 GPIO로 안전 강등:
+        #  ① SYS 특수신호(SYS_WKUP 등, SWD/JTAG 제외)  ② 동일 신호 중복(같은 채널 두 핀)
+        if fu.startswith("SYS") and not ("SW" in fu or "JT" in fu):
+            func, fu = "GPIO_Input", "GPIO_INPUT"
+        elif not fu.startswith("GPIO") and fu in used_sigs:
+            func, fu = "GPIO_Output", "GPIO_OUTPUT"
+        if not fu.startswith("GPIO"):
+            used_sigs.add(fu)
         props[f"{disp}.Signal"] = _pin_signal_value(func)  # TIM은 S_ 접두
         props[f"{disp}.Locked"] = "true"
-        _fu = func.upper()
-        if _fu in ("RCC_OSC_IN", "RCC_OSC_OUT"):
+        if fu in ("RCC_OSC_IN", "RCC_OSC_OUT"):
             props[f"{disp}.Mode"] = "HSE-External-Oscillator"
-        elif _fu in ("RCC_OSC32_IN", "RCC_OSC32_OUT"):
+        elif fu in ("RCC_OSC32_IN", "RCC_OSC32_OUT"):
             props[f"{disp}.Mode"] = "LSE-External-Oscillator"
         ip = _peripheral_of(func)
         if ip:
