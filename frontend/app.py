@@ -589,6 +589,36 @@ def _run_review_bg(data: dict, files: dict) -> None:
         st.session_state._rv_running = False
 
 
+def _run_extract_bg(data: dict, files: list) -> None:
+    """Vision 핀맵 추출을 백그라운드로 — 동기 호출이 rerun으로 폐기돼 결과가 유실되던 문제 해결."""
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/v1/extract-pinmap",
+            data=data, files=files if files else None, timeout=None,
+        )
+        st.session_state._extract_result = r
+    except Exception as e:
+        st.session_state._extract_error = str(e)
+    finally:
+        st.session_state._extract_running = False
+
+
+def _begin_extract(data: dict, files: list) -> None:
+    st.session_state._extract_running = True
+    st.session_state._extract_active = True   # 사용자가 이 Vision 결과를 기다리는 중
+    st.session_state._extract_result = None
+    st.session_state._extract_error = None
+    st.session_state._extract_start = time.time()
+    try:
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        ctx = get_script_run_ctx()
+        t = threading.Thread(target=_run_extract_bg, args=(data, files), daemon=True)
+        add_script_run_ctx(t, ctx)
+    except Exception:
+        t = threading.Thread(target=_run_extract_bg, args=(data, files), daemon=True)
+    t.start()
+
+
 def _begin_review(data: dict, files: list) -> None:
     """검증 백그라운드 시작 + 이전 결과/상태 초기화 (직접 CSV 경로·확정 경로 공용)."""
     st.session_state._rv_running = True
@@ -825,6 +855,37 @@ with tab1:
 
     st.divider()
 
+    # ── Vision 백그라운드 추출 결과 처리 (완료 시 확정 단계로) ───────────────
+    #    정책: 핀맵은 업로드 CSV가 우선(더 정확). Vision은 페리페럴/분석을 제공 → 항상 반영.
+    _exr = st.session_state.pop("_extract_result", None)
+    if (_exr is not None and not st.session_state.get("_extract_running", False)
+            and st.session_state.pop("_extract_active", False)):  # 취소됐으면 결과 폐기
+        if getattr(_exr, "status_code", 0) == 200:
+            _res = _exr.json()
+            if _res.get("peripherals"):
+                st.session_state.confirm_peripherals = _res["peripherals"]  # Vision 페리페럴 반영
+            st.session_state.confirm_vision_analysis = _res.get("vision_analysis", "")
+            _ov = st.session_state.pop("_extract_csv_override", "") or ""
+            if _ov.strip():
+                st.session_state.confirm_pinmap_csv = _ov                  # 핀맵: CSV 우선
+                st.session_state.confirm_chip = st.session_state.pop("_extract_csv_chip", "") \
+                    or st.session_state.confirm_chip
+                st.session_state._extract_msg = "Vision 페리페럴 반영 완료 — 핀맵은 업로드 CSV 사용"
+            else:
+                st.session_state.confirm_pinmap_csv = (
+                    _res.get("pinmap_csv") or "mcu,chip,pin,function,label\n")
+                st.session_state.confirm_chip = _res.get("chip", "")
+                st.session_state._extract_msg = "Vision 핀맵 추출 완료"
+            st.rerun()
+        else:
+            st.session_state._extract_error = (
+                f"Vision 추출 실패 {getattr(_exr, 'status_code', '?')}: "
+                f"{getattr(_exr, 'text', '')[:200]}")
+    if st.session_state.get("_extract_error"):
+        st.error(st.session_state.pop("_extract_error"))
+    if st.session_state.get("_extract_msg"):
+        st.success(st.session_state.pop("_extract_msg"))
+
     # 입력 유효성 확인
     has_image = bool(schematic_files) or bool(st.session_state.pasted_images_b64)
     has_csv = bool(csv_text and csv_text.strip()) or (csv_file is not None)
@@ -989,32 +1050,51 @@ with tab1:
             st.session_state.confirm_peripherals = ""
             st.rerun()
 
-    # ── 이미지 입력: ① Vision 추출 → 검토 ───────────────────────────────
+    # ── 이미지 입력: ① Vision 추출 → 검토 (백그라운드) ──────────────────
     elif has_image:
-        st.success("회로도 이미지 감지 — 먼저 Vision으로 핀맵을 추출해 검토합니다.")
-        if st.button("① Vision으로 핀맵 추출 → 검토", type="primary", disabled=run_disabled,
-                     use_container_width=True, key="btn_extract"):
-            if not prompt.strip():
-                st.error("프롬프트를 입력하세요.")
-                st.stop()
-            _ex_data = {"prompt": prompt, "chip": "" if chip == AUTO_CHIP else chip}
-            with st.spinner("Vision으로 핀맵 추출 중... (회로도 장수에 따라 최대 5분)"):
-                try:
-                    _er = requests.post(
-                        f"{BACKEND_URL}/v1/extract-pinmap",
-                        data=_ex_data, files=_image_files(), timeout=600,
-                    )
-                    if _er.status_code == 200:
-                        _res = _er.json()
-                        st.session_state.confirm_pinmap_csv = _res.get("pinmap_csv") or "chip,pin,function,label\n"
-                        st.session_state.confirm_chip = _res.get("chip") or ("" if chip == AUTO_CHIP else chip)
-                        st.session_state.confirm_vision_analysis = _res.get("vision_analysis", "")
-                        st.session_state.confirm_peripherals = _res.get("peripherals", "")
-                    else:
-                        st.error(f"Vision 추출 실패 {_er.status_code}: {_er.text[:200]}")
-                except Exception as _e:
-                    st.error(f"Vision 추출 요청 실패: {_e}")
+        if st.session_state.get("_extract_running"):
+            _el = int(time.time() - st.session_state.get("_extract_start", time.time()))
+            st.info(f"🔍 Vision으로 핀맵 추출 중… ({_el}초 경과 · 회로도 장수에 따라 수 분). "
+                    "완료되면 자동으로 검토 화면이 열립니다.")
+            if st.button("✖ Vision 추출 취소", key="btn_extract_cancel"):
+                st.session_state._extract_active = False
+                st.session_state._extract_running = False
+                st.rerun()
+            time.sleep(2)
             st.rerun()
+        else:
+            # 업로드 CSV가 있으면 핀맵은 CSV가 우선 — Vision은 페리페럴/분석만 담당
+            _ov_csv = ""
+            if csv_file is not None:
+                csv_file.seek(0); _ov_csv = csv_file.read().decode("utf-8-sig"); csv_file.seek(0)
+            elif csv_text and csv_text.strip() and csv_text.strip() != EXAMPLE_CSV.strip():
+                _ov_csv = csv_text
+            _btn_label = ("① Vision으로 페리페럴 추출 (핀맵은 업로드 CSV 사용)"
+                          if _ov_csv.strip() else "① Vision으로 핀맵 추출 → 검토")
+            st.success(
+                ("회로도 + CSV 감지 — Vision은 페리페럴/분석을 추출하고, 핀맵은 업로드 CSV를 씁니다."
+                 if _ov_csv.strip() else
+                 "회로도 이미지 감지 — Vision으로 핀맵을 추출해 검토합니다.")
+                + " (백그라운드 — 다른 작업을 해도 결과가 보존됩니다)")
+            if st.button(_btn_label, type="primary", disabled=run_disabled,
+                         use_container_width=True, key="btn_extract"):
+                if not prompt.strip():
+                    st.error("프롬프트를 입력하세요.")
+                    st.stop()
+                # CSV 우선용 캡처(핀맵) + 칩
+                st.session_state._extract_csv_override = _ov_csv
+                _ov_chip = ""
+                if _ov_csv.strip():
+                    try:
+                        _dfo = pd.read_csv(StringIO(_ov_csv))
+                        if "chip" in _dfo.columns and len(_dfo):
+                            _ov_chip = str(_dfo["chip"].iloc[0]).strip()
+                    except Exception:
+                        pass
+                st.session_state._extract_csv_chip = _ov_chip
+                _ex_data = {"prompt": prompt, "chip": "" if chip == AUTO_CHIP else chip}
+                _begin_extract(_ex_data, _image_files())
+                st.rerun()
 
     # ── 직접 CSV 입력: 바로 검증 ─────────────────────────────────────────
     else:
