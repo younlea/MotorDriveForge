@@ -694,7 +694,7 @@ with st.sidebar:
         value=st.session_state._dev_debug,
         help="결과 표시 후에도 인식된 입력값·Rule Engine·RAG·서버 로그를 접이식으로 노출합니다. 운영 시 끄세요.",
     )
-    st.caption("MotorDriveForge v2.0")
+    st.caption("[MotorDriveForge v2.0](https://github.com/younlea/MotorDriveForge)")
 
 
 # ---------------------------------------------------------------------------

@@ -1159,8 +1159,13 @@ def _build_ioc_content(
             func, fu = "GPIO_Output", "GPIO_OUTPUT"
         if not fu.startswith("GPIO"):
             used_sigs.add(fu)
-        props[f"{disp}.Signal"] = _pin_signal_value(func)  # TIM은 S_ 접두
+        sval = _pin_signal_value(func)  # TIM은 S_ 접두
+        props[f"{disp}.Signal"] = sval
         props[f"{disp}.Locked"] = "true"
+        if sval.startswith("S_"):
+            # TIM 메인채널/ETR은 Signal Handler 매핑 필요(실제 MX 형식) — HAL 채널 인식용.
+            props[f"SH.{sval}.0"] = func
+            props[f"SH.{sval}.ConfNb"] = "1"
         if fu in ("RCC_OSC_IN", "RCC_OSC_OUT"):
             props[f"{disp}.Mode"] = "HSE-External-Oscillator"
         elif fu in ("RCC_OSC32_IN", "RCC_OSC32_OUT"):
