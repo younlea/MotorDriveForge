@@ -1067,13 +1067,13 @@ def _synth_spi(props, inst, items):
 
 
 def _synth_fdcan(props, inst, items, vp):
-    """FDCAN 자동 설정 — 핀 FDCAN_Activate + 기본 클래식 프레임."""
+    """FDCAN 자동 설정 — 핀 FDCAN_Activate + 기본 클래식 프레임.
+    G4 FDCAN은 NominalBaudRate 파라미터가 없다(Prescaler/TimeSeg로 설정) → 넣지 않는다.
+    타이밍은 CubeMX 기본값에 맡기고 핀 활성화만 한다."""
     for pin, _, _ in items:
         props[f"{pin}.Mode"] = "FDCAN_Activate"
+    props[f"{inst}.IPParameters"] = "FrameFormat"
     props[f"{inst}.FrameFormat"] = "FDCAN_FRAME_CLASSIC"
-    props[f"{inst}.NominalBaudRate"] = str(vp.get("fdcan_baudrate", 1000000))
-    props[f"{inst}.NominalSamplePoint"] = "87.5"
-    props[f"{inst}.IPParameters"] = "FrameFormat,NominalBaudRate,NominalSamplePoint"
 
 
 def _build_ioc_content(
@@ -1149,9 +1149,25 @@ def _build_ioc_content(
         props[f"Mcu.Pin{i}"] = mp
     props["Mcu.PinsNb"] = str(len(mcu_pins))
 
-    # 4) 주변장치 모드/채널 자동 합성 (배정 신호에서 연관 설정 유도)
+    # 4) 주변장치 모드/채널 자동 합성. 불완전 주변장치(예: SCK 없는 SPI, RX/TX 한쪽뿐인 FDCAN)는
+    #    CubeMX가 유효 모드를 못 정해 BGA 렌더링에서 크래시(GBall) → 해당 핀을 GPIO로 강등한다.
+    def _demote_to_gpio(items):
+        for pin, _sig, _lbl in items:
+            props.pop(f"{pin}.Mode", None)
+            props[f"{pin}.Signal"] = "GPIO_Output"
+            props[f"{pin}.Locked"] = "true"
+
+    used_ips: List[str] = []
     for inst, items in periph.items():
         kind = re.sub(r"\d+$", "", inst)  # TIM1→TIM, ADC1→ADC ...
+        sigs = [s.upper() for _, s, _ in items]
+        if kind == "SPI" and not any("SCK" in s for s in sigs):
+            _demote_to_gpio(items); continue            # SCK 없는 고아 SPI → GPIO
+        if kind == "I2C" and not (any("SCL" in s for s in sigs) and any("SDA" in s for s in sigs)):
+            _demote_to_gpio(items); continue
+        if kind == "FDCAN" and not (any(s.endswith("_TX") for s in sigs)
+                                    and any(s.endswith("_RX") for s in sigs)):
+            _demote_to_gpio(items); continue
         if kind == "TIM":
             _synth_tim(props, inst, items, vp)
         elif kind == "ADC":
@@ -1160,10 +1176,11 @@ def _build_ioc_content(
             _synth_spi(props, inst, items)
         elif kind == "FDCAN":
             _synth_fdcan(props, inst, items, vp)
-        # 그 외(I2C/USART/OPAMP/COMP/DAC)는 Signal만 — CubeMX가 기본 모드로 표시
+        # 그 외(USART/OPAMP/COMP/DAC)는 Signal만 — CubeMX가 기본 모드로 표시
+        used_ips.append(inst)
 
-    # 5) IP 목록 — 기본 3종(NVIC/RCC/SYS) + 합성된 주변장치
-    ip_list = ["NVIC", "RCC", "SYS"] + sorted(periph.keys())
+    # 5) IP 목록 — 기본 3종(NVIC/RCC/SYS) + 정상 합성된 주변장치만
+    ip_list = ["NVIC", "RCC", "SYS"] + sorted(set(used_ips))
     for i, ip in enumerate(ip_list):
         props[f"Mcu.IP{i}"] = ip
     props["Mcu.IPNb"] = str(len(ip_list))
