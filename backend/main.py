@@ -1107,6 +1107,10 @@ def _build_ioc_content(
     props["ProjectManager.DeviceId"] = ident["user"]
     props["ProjectManager.ProjectName"] = proj_name
     props["ProjectManager.ProjectFileName"] = f"{proj_name}.ioc"
+    # BGA 패키지는 PinOutPanel.CurrentBGAView가 없으면 패키지 뷰 초기화 실패 →
+    # BGAPackage$GBall get(0) 크래시. (LQFP/QFN은 불필요)
+    if "BGA" in ident["pkg"].upper():
+        props["PinOutPanel.CurrentBGAView"] = "Top"
 
     # HSE(크리스털) 주파수 반영
     crystal_hz = int(vp.get("crystal_mhz", 24)) * 1_000_000
