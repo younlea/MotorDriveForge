@@ -232,6 +232,38 @@ JTAG_ONLY_PINS: Dict[str, str] = {
 # webui와 같은 모델을 써서 단일 runner를 공유 → evict/콜드로드 원천 차단. 품질은 31b와 동일.
 GEMMA4_VISION_MODEL = "gemma4-fast:latest"
 
+
+def _dominant_chip(df: "pd.DataFrame", default: str) -> str:
+    """그룹 내 가장 많이 등장한(비어있지 않은) chip 컬럼 값. 없으면 default."""
+    if "chip" in df.columns:
+        vals = [str(v).strip() for v in df["chip"].tolist()
+                if str(v).strip() and str(v).strip().upper() != "NAN"]
+        if vals:
+            return max(set(vals), key=vals.count)
+    return default
+
+
+def split_mcus(df: "pd.DataFrame", default_chip: str) -> List[Dict[str, Any]]:
+    """핀맵 DataFrame을 MCU별로 분리. `mcu`(지정자 U1/U2…) 컬럼 기준.
+
+    반환: [{"mcu": 지정자, "chip": 부품번호, "df": 서브DF}]. mcu 컬럼이 없거나 값이
+    1종 이하면 단일 MCU로 처리(하위호환). 같은 칩이 여러 개여도 mcu 지정자로 구분된다.
+    """
+    df = df.copy()
+    if "mcu" in df.columns:
+        key = df["mcu"].fillna("").astype(str).str.strip()
+    else:
+        key = pd.Series([""] * len(df), index=df.index)
+    distinct = {k for k in key.tolist() if k}
+    if len(distinct) <= 1:
+        mcu = next(iter(distinct)) if distinct else "MCU1"
+        return [{"mcu": mcu, "chip": _dominant_chip(df, default_chip), "df": df}]
+    groups = []
+    for mcu in sorted(distinct):
+        sub = df[key == mcu]
+        groups.append({"mcu": mcu, "chip": _dominant_chip(sub, default_chip), "df": sub})
+    return groups
+
 # ---------------------------------------------------------------------------
 # ReviewAgent
 # ---------------------------------------------------------------------------
@@ -443,13 +475,15 @@ class ReviewAgent:
             "첨부된 회로도에서 STM32 칩셋과 각 핀의 연결을 하나씩 꼼꼼히 읽어 정리하세요.\n"
             f"타겟 칩 힌트: {chip_hint or 'STM32G4 계열'}\n"
             f"{multi_note}"
-            "가장 중요: 각 핀 옆/배선에 적힌 신호 이름(net label, 예: VSENS_VM)을 글자 그대로 정확히 읽으세요.\n\n"
+            "가장 중요: 각 핀 옆/배선에 적힌 신호 이름(net label, 예: VSENS_VM)을 글자 그대로 정확히 읽으세요.\n"
+            "회로도에 STM32 MCU가 여러 개면 각각을 회로도의 부품 지정자(U1, U2, U3…)로 구분하세요. "
+            "MCU가 하나면 모두 U1로 두면 됩니다.\n\n"
             "아래 형식으로만 출력하세요 (잡담·설명 금지):\n\n"
-            "CHIP: <칩명, 예: STM32G431RBI6>\n\n"
+            "MCUS: U1=<칩명 예 STM32G431RBI6>[, U2=<칩명>, ...]\n\n"
             "CSV:\n"
-            "chip,pin,function,label\n"
-            "<칩>,<핀 예 PA0>,,<회로도 신호이름 예 VSENS_VM>\n"
-            "... (보이는 모든 핀. function 칸은 위 예시처럼 비워두세요)\n\n"
+            "mcu,chip,pin,function,label\n"
+            "<U1 등>,<그 MCU 칩명>,<핀 예 PA0>,,<회로도 신호이름 예 VSENS_VM>\n"
+            "... (보이는 모든 MCU의 모든 핀. function 칸은 위 예시처럼 비워두세요)\n\n"
             "PERIPHERALS:\n"
             "<외부 부품/연결을 보이는 대로만 한 줄씩 (게이트드라이버·전류감지·보호·커넥터·전원). 안 보이면 생략>\n\n"
             "SUMMARY:\n"
@@ -471,9 +505,17 @@ class ReviewAgent:
             logger.warning("Vision extraction 응답 없음 또는 너무 짧음 (len=%d)", len(raw or ""))
             return "", "", ""
 
-        # CHIP 파싱
+        # MCUS/CHIP 파싱 — 다중 MCU 우선(MCUS: U1=..., U2=...), 없으면 단일 CHIP.
+        mcus_map: Dict[str, str] = {}  # 지정자 → 칩
+        mcus_match = re.search(r"MCUS?:\s*(.+)", raw, re.IGNORECASE)
+        if mcus_match:
+            for tok in re.findall(r"(U\d+)\s*=\s*(STM32\w+)", mcus_match.group(1), re.IGNORECASE):
+                mcus_map[tok[0].upper()] = tok[1].upper()
         chip_match = re.search(r"CHIP:\s*(STM32G\w+)", raw, re.IGNORECASE)
-        extracted_chip = chip_match.group(1).upper() if chip_match else chip_hint
+        extracted_chip = (
+            next(iter(mcus_map.values())) if mcus_map
+            else (chip_match.group(1).upper() if chip_match else chip_hint)
+        )
 
         # CSV 섹션 추출 — 가변 줄바꿈 허용, 대소문자 무관 (PERIPHERALS/SUMMARY 앞에서 멈춤)
         csv_match = re.search(
@@ -483,17 +525,30 @@ class ReviewAgent:
         pinmap_csv = ""
         if csv_match:
             csv_block = csv_match.group(1).strip()
-            # chip 컬럼이 없으면 보완
             lines = csv_block.splitlines()
-            if lines and "chip" in lines[0].lower():
-                # chip 컬럼 값이 비어있으면 extracted_chip으로 채움
+            header = lines[0].lower() if lines else ""
+            if "mcu" in header and "chip" in header:
+                # 신형식(mcu,chip,...): mcu 비면 U1, chip 비면 그 mcu의 칩(또는 extracted)
+                cols = [c.strip() for c in lines[0].split(",")]
+                mi, ci = cols.index("mcu"), cols.index("chip")
+                fixed = [lines[0]]
+                for line in lines[1:]:
+                    parts = line.split(",")
+                    if len(parts) > max(mi, ci):
+                        if not parts[mi].strip():
+                            parts[mi] = "U1"
+                        if not parts[ci].strip().upper().startswith("STM32"):
+                            parts[ci] = mcus_map.get(parts[mi].strip().upper(), extracted_chip)
+                    fixed.append(",".join(parts))
+                pinmap_csv = "\n".join(fixed)
+            elif "chip" in header:
+                # 구형식(chip,...): chip 비면 extracted_chip
                 fixed = [lines[0]]
                 for line in lines[1:]:
                     parts = line.split(",")
                     if parts and not parts[0].strip().startswith("STM32"):
                         parts[0] = extracted_chip
-                        line = ",".join(parts)
-                    fixed.append(line)
+                    fixed.append(",".join(parts))
                 pinmap_csv = "\n".join(fixed)
             else:
                 pinmap_csv = csv_block
@@ -1059,7 +1114,16 @@ class ReviewAgent:
 
         logger.info("[STAGE] rule_engine:start")
         _t0 = self._stage_start("rule_engine")
-        rule_errors, rule_warnings = self.validate_pins_rules(pinmap_df, requirements)
+        # MCU별로 Rule Engine 실행 (같은 칩 여러 개도 mcu 지정자로 분리). 다중이면 메시지에 접두.
+        _mcu_groups = split_mcus(pinmap_df, requirements.chip)
+        rule_errors, rule_warnings = [], []
+        _multi = len(_mcu_groups) > 1
+        for _g in _mcu_groups:
+            _req_g = requirements.model_copy(update={"chip": _g["chip"]})
+            _e, _w = self.validate_pins_rules(_g["df"], _req_g)
+            _pfx = f"[{_g['mcu']} {_g['chip']}] " if _multi else ""
+            rule_errors += [_pfx + x for x in _e]
+            rule_warnings += [_pfx + x for x in _w]
         self._stage_done("rule_engine", _t0)
         logger.info("[STAGE] rule_engine:done errors=%d warnings=%d", len(rule_errors), len(rule_warnings))
         self._save_partial(rule_errors=rule_errors, rule_warnings=rule_warnings)
@@ -1088,10 +1152,8 @@ class ReviewAgent:
             "PMSM": "PMSM FOC 3상 PWM TIM1 상보출력 OPAMP 전류감지",
             "BLDC_6step": "BLDC 6-step 사다리꼴 PWM TIM1 홀센서 전류감지",
             "DC": "브러시드 DC 모터 H-bridge PWM TIM 전류감지",
-        }.get(requirements.control_type, "모터 제어 PWM TIM")
-        rag_query = (
-            f"STM32G4 {request.chip} 핀 AF 검증 {ctrl_kw} 규칙"
-        )
+        }.get(requirements.control_type, "")  # 미지정이면 모터 키워드 안 붙임
+        rag_query = f"STM32G4 {request.chip} 핀 AF 검증 규칙 {ctrl_kw}".strip()
         if keyword_hints:
             rag_query += f" {keyword_hints}"
         if vision_analysis:
@@ -1238,32 +1300,34 @@ Review the MCU pinmap AND any peripherals shown, then return JSON."""
             logger.error("LLM JSON decode error: %s", e)
             return [], [], []
 
+    def _pins_of(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """DataFrame → 핀 엔트리 리스트(pin/function/label/af)."""
+        def _s(v: Any) -> str:
+            return "" if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v)
+
+        out = []
+        if "pin" in df.columns:
+            for _, row in df.iterrows():
+                entry = {
+                    "pin": _s(row.get("pin")).upper(),
+                    "function": _s(row.get("function")),
+                    "label": _s(row.get("label")),
+                }
+                if not entry["pin"]:
+                    continue
+                af = self.pin_af_db.get(entry["pin"], {}).get(entry["function"].upper(), "")
+                if af:
+                    entry["af"] = af
+                out.append(entry)
+        return out
+
     def _build_validated_pins(
         self,
         pinmap_df: pd.DataFrame,
         requirements: RequirementsDict,
     ) -> Dict[str, Any]:
-        """확정 핀 JSON 구조 생성."""
-        def _s(v: Any) -> str:
-            return "" if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v)
-
-        pins_list = []
-        if "pin" in pinmap_df.columns:
-            for _, row in pinmap_df.iterrows():
-                entry: Dict[str, Any] = {
-                    "pin": _s(row.get("pin")).upper(),
-                    "function": _s(row.get("function")),
-                    "label": _s(row.get("label")),
-                }
-                pin_upper = entry["pin"]
-                if pin_upper in self.pin_af_db:
-                    func_upper = entry["function"].upper()
-                    af = self.pin_af_db[pin_upper].get(func_upper, "")
-                    entry["af"] = af
-                pins_list.append(entry)
-
-        return {
-            "chip": requirements.chip,
+        """확정 핀 JSON 구조 생성. 다중 MCU면 `mcus` 리스트로 분리(하위호환: flat pins/chip 유지)."""
+        base = {
             "clock_mhz": requirements.clock_mhz,
             "crystal_mhz": requirements.crystal_mhz,
             "motor_count": requirements.motor_count,
@@ -1274,7 +1338,18 @@ Review the MCU pinmap AND any peripherals shown, then return JSON."""
             "current_sense": requirements.current_sense,
             "comms": requirements.comms,
             "spi_eeprom": requirements.spi_eeprom,
-            "pins": pins_list,
+        }
+        groups = split_mcus(pinmap_df, requirements.chip)
+        mcus = [
+            {**base, "mcu": g["mcu"], "chip": g["chip"], "pins": self._pins_of(g["df"])}
+            for g in groups
+        ]
+        # 하위호환: 단일 MCU 형태(첫 MCU)도 최상위에 유지 — Step 2 단일 경로/구버전 프론트용
+        return {
+            **base,
+            "chip": mcus[0]["chip"] if mcus else requirements.chip,
+            "pins": self._pins_of(pinmap_df),
+            "mcus": mcus,
         }
 
 
