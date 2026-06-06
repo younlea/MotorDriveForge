@@ -90,13 +90,15 @@ class RequirementsDict(BaseModel):
     chip: str = ""
     clock_mhz: int = 170
     crystal_mhz: int = 8
-    motor_count: int = 1
-    control_type: str = "FOC"           # FOC | BLDC_6step | PMSM | DC(브러시드)
-    encoder_type: str = "incremental"   # incremental | hall | sensorless
+    # 기본값은 '모터 미가정' — 프롬프트/회로도에 모터가 명시될 때만 채운다.
+    # (예전 control_type 기본 "FOC"가 비-모터 보드에 3상 PWM/OPAMP 오류를 유발했음)
+    motor_count: int = 0
+    control_type: str = "unspecified"   # unspecified | FOC | BLDC_6step | PMSM | DC(브러시드)
+    encoder_type: str = "unspecified"   # unspecified | incremental | hall | sensorless
     encoder_channels: List[str] = Field(default_factory=list)
-    pwm_channels: int = 6
+    pwm_channels: int = 0
     deadtime_ns: int = 500
-    current_sense: str = "internal_opamp"  # internal_opamp | shunt_external | hall
+    current_sense: str = "unspecified"  # unspecified | internal_opamp | shunt_external | hall
     comms: List[str] = Field(default_factory=list)   # fdcan, uart, spi, i2c, usb
     fdcan_baudrate: int = 1000000
     spi_eeprom: bool = False
@@ -553,6 +555,10 @@ class ReviewAgent:
               or "dc 모터" in pl or re.search(r"\bdc\b", pl)):
             req.control_type = "DC"  # 브러시드 DC — 3상 FOC 아님
 
+        # 모터 제어가 명시됐는데 개수 미지정이면 1개로(미명시면 0 유지 = 비-모터 가정).
+        if req.control_type != "unspecified" and req.motor_count == 0:
+            req.motor_count = 1
+
         # --- 인코더
         if "증분형" in prompt or "incremental" in prompt.lower():
             req.encoder_type = "incremental"
@@ -620,11 +626,13 @@ class ReviewAgent:
     def _llm_enhance_requirements(self, req: RequirementsDict) -> RequirementsDict:
         model = self._available_model()
         system = (
-            "You are an STM32G4 expert. Parse the hardware requirements from the user prompt "
-            "and output ONLY a JSON object with these keys: "
+            "You are an STM32G4 hardware-requirements parser. Extract ONLY what the prompt "
+            "explicitly states — do NOT assume an application. Output ONLY a JSON object with keys: "
             "chip, clock_mhz, crystal_mhz, motor_count, control_type, encoder_type, "
             "pwm_channels, deadtime_ns, current_sense, comms (list), fdcan_baudrate, spi_eeprom (bool). "
-            "Do not add any explanation."
+            "If the prompt does NOT mention motors/drivers, set motor_count=0 and "
+            'control_type="unspecified" (do not invent FOC/BLDC/3-phase). '
+            "If a motor type is stated, use it (DC/brushed is NOT 3-phase FOC). No explanation."
         )
         user = f"Prompt:\n{req.raw_prompt}\n\nCurrent parsed (may be incomplete):\n{req.model_dump_json()}"
         # 작은 JSON 출력 — think=False(기본), num_predict 작게 잡아 빠르게.
@@ -1148,18 +1156,25 @@ class ReviewAgent:
         errors, warnings, suggestions 반환."""
         model = self._available_model()
 
-        system = """You are an expert STM32G4 motor-drive hardware reviewer.
-Review BOTH the STM32 pin assignments AND the connected peripherals (gate driver, power stage,
-current sensing, protection, connectors, power supply). Output ONLY a JSON object with:
+        system = """You are an expert STM32G4 embedded-hardware reviewer.
+Review the STM32 pin assignments and any peripherals shown in the data. ADAPT to what the design
+actually is — do NOT assume it is a motor drive. Treat it as a motor/3-phase/PWM-power design ONLY
+if the prompt, PERIPHERALS, or pin labels clearly indicate motors, motor drivers, gate drivers, or
+a 3-phase power stage. If the application is unclear or non-motor, review only what is present and
+raise missing-info questions via suggestions — do NOT invent motor-control requirements (FOC,
+3-phase PWM, complementary PWM, dead-time, gate drivers, current sensing) that are not indicated.
+Output ONLY a JSON object with:
 {
   "errors": ["..."],
   "warnings": ["..."],
   "suggestions": ["..."]
 }
-Cover, where the data allows:
-- MCU side: AF/pin conflicts, timer/ADC/DMA, complementary PWM + dead-time, clock.
-- Power/EMI: gate driver bootstrap/supply, decoupling, current-sense resistor/OPAMP path, GND.
-- Safety/Failsafe: brake/BKIN, OCP/OVP/UVLO, watchdog, fault feedback to MCU.
+Cover, where the data indicates relevance:
+- MCU (always): AF/pin conflicts, timer/ADC/DMA usage, clock/oscillator, boot/reset, debug pins.
+- ONLY if motors/drivers are present: complementary PWM + dead-time, brake/BKIN, current sensing,
+  gate-driver bootstrap/supply.
+- Power/EMI/Safety as applicable to the actual design: decoupling, GND, OCP/OVP/UVLO, watchdog,
+  fault feedback.
 Rules:
 - errors: ONLY truly unresolvable or unsafe issues — an AF that does not exist on the pin,
   a hard pin conflict (two functions physically need the same pin), or a safety violation.
@@ -1182,7 +1197,17 @@ Rules:
             "\n연결된 페리페럴 정보 없음 — 페리페럴 관련은 추정 금지, 필요한 정보를 suggestion으로 질문할 것.\n"
         )
 
+        is_motor = requirements.control_type != "unspecified" or requirements.motor_count > 0
+        app_note = (
+            f"Application: motor control likely ({requirements.control_type}, "
+            f"{requirements.motor_count} motor(s)). Motor-control review is appropriate."
+            if is_motor else
+            "Application: NOT specified as a motor drive (control_type=unspecified, motor_count=0). "
+            "Do NOT assume FOC/3-phase/gate-driver. Review only what the pinmap/peripherals show; "
+            "ask via suggestions if the intent is unclear."
+        )
         user = f"""Chip: {request.chip}
+{app_note}
 Requirements (parsed):
 {requirements.model_dump_json(indent=2)}
 {vision_section}{periph_section}
@@ -1192,7 +1217,7 @@ Pinmap CSV:
 Reference documents (RAG):
 {rag_context}
 
-Review the MCU pinmap AND the peripherals, then return JSON."""
+Review the MCU pinmap AND any peripherals shown, then return JSON."""
 
         raw = self._ollama_generate(system, user, model)  # think=False (기본) — JSON 안정 출력
         if not raw:
