@@ -56,6 +56,10 @@ services:
       - ioc_outputs:/tmp/ioc_outputs
       - review_results:/app/review_results
       - ./agent:/app/agent:ro
+      # 오프라인 인제스천(RAG 인덱스 빌드)용 — 호스트에 python 없이 컨테이너에서 실행.
+      # scripts는 읽기전용, dataset은 chunks_code 생성 위해 쓰기 가능.
+      - ./scripts:/app/scripts:ro
+      - ./dataset:/app/dataset
       # 호스트의 HF 캐시(오프라인 인제스천 시 받은 bge-m3) → 컨테이너 HF_HOME
       - ${HF_CACHE_DIR:-/root/.cache/huggingface}:/hf_cache:ro
     depends_on:
