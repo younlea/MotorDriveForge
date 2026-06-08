@@ -91,6 +91,8 @@ services:
       - NO_PROXY=localhost,127.0.0.1,host.docker.internal,qdrant,backend,frontend,172.16.0.0/12
     volumes:
       - ./agent:/app/agent:ro
+      # 호스트 app.py를 그대로 사용 — git pull 후 컨테이너 재시작만으로 반영(재빌드 불필요)
+      - ./frontend/app.py:/app/app.py:ro
     depends_on:
       backend:
         condition: service_healthy

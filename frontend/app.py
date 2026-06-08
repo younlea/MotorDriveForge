@@ -573,15 +573,15 @@ def _pipeline_status_html() -> str:
     )
 
 
-# 워커 스레드 → UI 결과 핸드오프용 모듈 전역.
-# 스레드에서 st.session_state를 직접 쓰면 ScriptRunContext 만료 시 접근이 예외를 던져
-# 스레드가 조용히 죽고 _rv_running이 영영 True로 남는다(백엔드는 200을 돌려줬는데도
-# UI가 '진행 중'에 멈춤). 전역 dict는 같은 프로세스의 스레드/리런에서 안전하게 공유되므로
-# 스레드는 여기에만 쓰고, 메인 스레드(러닝 루프)에서 session_state로 옮긴다.
-_RV_JOBS: dict = {}
-
-
-def _run_review_bg(job_id: str, data: dict, files: dict) -> None:
+# 워커 스레드 → UI 결과 핸드오프.
+# 두 함정을 동시에 피한다:
+#  (1) 스레드가 st.session_state를 '직접' 쓰면 ScriptRunContext 만료 시 예외로 죽어
+#      _rv_running이 영영 True로 남는다(백엔드 200인데 UI가 '진행 중'에 멈춤).
+#  (2) 모듈 최상단 `_X = {}`는 Streamlit이 매 리런마다 스크립트를 처음부터 재실행하므로
+#      빈 dict로 초기화돼 워커가 쓴 결과가 사라진다.
+# 해법: session_state가 '한 번만' 만들어 잡고 있는 dict 객체(리런에도 동일 객체)를 워커에
+#      인자로 넘긴다. 워커는 그 dict를 직접 변형만 하고(st API 미사용), 메인 스레드가 읽는다.
+def _run_review_bg(store: dict, job_id: str, data: dict, files: dict) -> None:
     try:
         r = requests.post(
             f"{BACKEND_URL}/v1/review",
@@ -589,25 +589,21 @@ def _run_review_bg(job_id: str, data: dict, files: dict) -> None:
             files=files if files else None,
             timeout=None,
         )
-        _RV_JOBS[job_id] = {"result": r, "error": None}
+        store[job_id] = {"result": r, "error": None}
     except Exception as e:
-        _RV_JOBS[job_id] = {"result": None, "error": str(e)}
+        store[job_id] = {"result": None, "error": str(e)}
 
 
-_EXTRACT_JOBS: dict = {}
-
-
-def _run_extract_bg(job_id: str, data: dict, files: list) -> None:
-    """Vision 핀맵 추출 백그라운드. 스레드는 _EXTRACT_JOBS에만 쓴다(위 _RV_JOBS와 동일 이유 —
-    스레드에서 st.session_state 직접 접근 시 ctx 만료로 죽어 _extract_running이 안 풀림)."""
+def _run_extract_bg(store: dict, job_id: str, data: dict, files: list) -> None:
+    """Vision 핀맵 추출 백그라운드. 위 _run_review_bg와 동일 — session_state가 잡은 dict에만 쓴다."""
     try:
         r = requests.post(
             f"{BACKEND_URL}/v1/extract-pinmap",
             data=data, files=files if files else None, timeout=None,
         )
-        _EXTRACT_JOBS[job_id] = {"result": r, "error": None}
+        store[job_id] = {"result": r, "error": None}
     except Exception as e:
-        _EXTRACT_JOBS[job_id] = {"result": None, "error": str(e)}
+        store[job_id] = {"result": None, "error": str(e)}
 
 
 def _begin_extract(data: dict, files: list) -> None:
@@ -619,8 +615,11 @@ def _begin_extract(data: dict, files: list) -> None:
     import uuid as _uuid
     job_id = _uuid.uuid4().hex
     st.session_state._extract_job_id = job_id
-    _EXTRACT_JOBS.clear()
-    t = threading.Thread(target=_run_extract_bg, args=(job_id, data, files), daemon=True)
+    if "_extract_store" not in st.session_state:
+        st.session_state["_extract_store"] = {}
+    _store = st.session_state["_extract_store"]
+    _store.clear()
+    t = threading.Thread(target=_run_extract_bg, args=(_store, job_id, data, files), daemon=True)
     t.start()
 
 
@@ -648,12 +647,15 @@ def _begin_review(data: dict, files: list) -> None:
         st.session_state.last_submitted_pinmap = data["pinmap_csv"]
         st.session_state.last_submitted_chip = data.get("chip", "")
         st.session_state.pop("_label_hints", None)  # 제출→학습 갱신되니 힌트 캐시 무효화
-    # 스레드는 session_state를 안 건드리고 _RV_JOBS[job_id]에만 결과를 쓴다.
+    # 스레드는 session_state가 잡고 있는 dict 객체(리런에도 동일)에만 결과를 쓴다.
     import uuid as _uuid
     job_id = _uuid.uuid4().hex
     st.session_state._rv_job_id = job_id
-    _RV_JOBS.clear()  # 단일 활성 검증 가정(백엔드 _review_partial과 동일) — 이전 잔여 제거
-    t = threading.Thread(target=_run_review_bg, args=(job_id, data, files), daemon=True)
+    if "_rv_store" not in st.session_state:
+        st.session_state["_rv_store"] = {}
+    _store = st.session_state["_rv_store"]
+    _store.clear()  # 단일 활성 검증 가정(백엔드 _review_partial과 동일) — 이전 잔여 제거
+    t = threading.Thread(target=_run_review_bg, args=(_store, job_id, data, files), daemon=True)
     t.start()
 
 
@@ -1057,9 +1059,10 @@ with tab1:
     # ── 이미지 입력: ① Vision 추출 → 검토 (백그라운드) ──────────────────
     elif has_image:
         if st.session_state.get("_extract_running"):
-            # 워커 완료 핸드오프 (메인 스레드에서 session_state로 옮김) — _RV_JOBS와 동일 패턴
+            # 워커 완료 핸드오프 (메인 스레드에서 session_state로 옮김) — _rv_store와 동일 패턴
             _ejob = st.session_state.get("_extract_job_id")
-            _edone = _EXTRACT_JOBS.pop(_ejob, None) if _ejob else None
+            _estore = st.session_state.get("_extract_store") or {}
+            _edone = _estore.pop(_ejob, None) if _ejob else None
             if _edone is not None:
                 st.session_state._extract_result = _edone["result"]
                 if _edone["error"]:
@@ -1145,7 +1148,8 @@ with tab1:
         # 워커 완료 핸드오프 — 전역에서 결과를 받아 (메인 스레드에서) session_state로 옮긴다.
         # 이게 없으면 스레드 ctx 만료 시 완료가 UI에 반영 안 돼 진행중에 멈춘다.
         _job = st.session_state.get("_rv_job_id")
-        _done = _RV_JOBS.pop(_job, None) if _job else None
+        _store = st.session_state.get("_rv_store") or {}
+        _done = _store.pop(_job, None) if _job else None
         if _done is not None:
             st.session_state._rv_result = _done["result"]
             if _done["error"]:
