@@ -120,6 +120,7 @@ for key, default in [
     ("step3_job_id", None),
     ("step3_result", None),
     ("step3_hal_zip", None),
+    ("step3_auto_generate", True),
     ("step3_prompt", ""),
     # 백그라운드 검증 태스크
     ("_rv_running", False),
@@ -1899,17 +1900,28 @@ with tab3:
 
         st.divider()
 
-        # ── Step 2 HAL 코드 업로드 (선택) ────────────────────────────────
-        st.subheader("Step 2 HAL 코드 업로드 (선택)")
-        st.caption("Step 2에서 CubeMX로 생성한 ZIP을 올리면 적응된 코드를 USER CODE 마커에 자동 주입합니다.")
+        # ── HAL 프로젝트 확보 방식 ────────────────────────────────────────
+        st.subheader("HAL 프로젝트 확보")
+        st.caption(
+            "glue 코드를 빌드 가능한 프로젝트에 주입하려면 CubeMX 생성 프로젝트가 필요합니다. "
+            "서버에 CubeMX CLI가 있으면 자동 생성하고, 없으면 아래에서 직접 올린 ZIP을 사용합니다."
+        )
+        _auto_gen = st.checkbox(
+            "CubeMX CLI로 자동 생성 시도 (권장)", value=True, key="s3_auto_gen",
+            help="서버에 STM32CubeMX CLI가 설치돼 있어야 합니다. 실패 시 아래 업로드 ZIP으로 폴백합니다.",
+        )
+        st.session_state.step3_auto_generate = _auto_gen
         _hal_zip_up = st.file_uploader(
-            "HAL 코드 ZIP 업로드 (Step 2 결과물)", type=["zip"], key="s3_hal_zip"
+            "HAL 프로젝트 ZIP 업로드 (CLI 폴백용 — Step 2에서 CubeMX로 생성한 결과물)",
+            type=["zip"], key="s3_hal_zip",
         )
         if _hal_zip_up:
             st.session_state.step3_hal_zip = _hal_zip_up.read()
             st.success(f"ZIP 로드 완료 — {_hal_zip_up.name}")
         elif st.session_state.get("step3_hal_zip"):
             st.info("이전에 업로드한 HAL ZIP이 있습니다.")
+        if not _auto_gen and not st.session_state.get("step3_hal_zip"):
+            st.warning("자동 생성 미사용 + 업로드 없음 → 주입 없이 모듈+glue 코드만 생성됩니다.")
 
         st.divider()
 
@@ -1931,13 +1943,18 @@ with tab3:
                 key="btn_step3_run",
             ):
                 try:
+                    import base64 as _b64
+                    _hal_bytes = st.session_state.get("step3_hal_zip")
+                    _hal_b64 = _b64.b64encode(_hal_bytes).decode() if _hal_bytes else ""
                     _sr = requests.post(
                         f"{BACKEND_URL}/v1/generate-step3",
                         json={
                             "validated_pins": vp3,
                             "prompt": st.session_state.step3_prompt,
+                            "auto_generate": st.session_state.get("step3_auto_generate", True),
+                            "hal_zip_b64": _hal_b64,
                         },
-                        timeout=30,
+                        timeout=60,
                     )
                     if _sr.status_code == 200:
                         st.session_state.step3_job_id = _sr.json()["job_id"]
@@ -1980,91 +1997,87 @@ with tab3:
             _res = st.session_state.step3_result
             _mods = _res.get("modules", {})
             _sel  = _res.get("selected", [])
+            _glue = _res.get("glue", {})
+            _src_msg = _res.get("project_source", "")
 
-            st.success(f"완료 — {len(_mods)}개 모듈 적응 완료: {', '.join(_sel)}")
+            st.success(f"완료 — 모듈 {len(_mods)}개 + glue {len(_glue)}블록 생성 "
+                       f"(프로젝트: {_src_msg})")
 
-            # 핀맵 요약 확인
-            with st.expander("적용된 핀맵 요약", expanded=False):
+            # 통합 프로젝트 ZIP (백엔드가 주입까지 완료한 경우)
+            _intg_url = _res.get("integrated_download_url")
+            if _intg_url:
+                _intg = _res.get("integration") or {}
+                st.subheader("빌드 가능한 통합 프로젝트")
+                st.caption(
+                    f"복사: {len(_intg.get('copied', []))}개 파일 · "
+                    f"빌드등록: {_intg.get('build_registered')} · "
+                    f"주입 마커: {', '.join(_intg.get('injected_markers', [])) or '없음'}"
+                )
+                try:
+                    _zbytes = requests.get(f"{BACKEND_URL}{_intg_url}", timeout=30).content
+                    st.download_button(
+                        "⬇ 통합 프로젝트 ZIP 다운로드 (HAL + 모듈 + glue 주입)",
+                        data=_zbytes,
+                        file_name=_res.get("integrated_zip", "Integrated.zip"),
+                        mime="application/zip",
+                        type="primary",
+                        key="dl_integrated_zip",
+                    )
+                except Exception as _de:
+                    st.error(f"통합 ZIP 다운로드 실패: {_de}")
+            else:
+                st.info("HAL 프로젝트가 없어 주입은 건너뛰었습니다. 아래 glue/모듈을 수동으로 통합하세요. "
+                        "(자동 주입을 원하면 CubeMX CLI 사용 또는 프로젝트 ZIP 업로드)")
+
+            st.divider()
+
+            # 생성된 glue 코드 (USER CODE 마커별)
+            _MARKER_DESC = {
+                "Includes": "USER CODE BEGIN Includes — 모듈 헤더 #include",
+                "PV": "USER CODE BEGIN PV — 구조체 인스턴스 선언",
+                "2": "USER CODE BEGIN 2 — 초기화(구조체 채움 + Start)",
+                "3": "USER CODE BEGIN 3 — while(1) 제어 루프",
+            }
+            st.subheader("생성된 바인딩 glue 코드")
+            for _mk in ["Includes", "PV", "2", "3"]:
+                if _glue.get(_mk):
+                    with st.expander(_MARKER_DESC.get(_mk, _mk), expanded=(_mk == "2")):
+                        st.code(_glue[_mk], language="c")
+
+            # RAG 출처 (opensource 알고리즘 참고 — chunk_id 인용)
+            _rag = _res.get("rag_sources", [])
+            if _rag:
+                with st.expander(f"참고한 opensource 알고리즘 ({len(_rag)}건, 인용)", expanded=False):
+                    for _h in _rag:
+                        _lic = _h.get("license", "")
+                        _badge = "✅" if _lic in ("MIT", "Apache-2.0", "ST-BSD3") else "⚠GPL"
+                        st.caption(f"{_badge} [{_h.get('source')} · {_lic}] "
+                                   f"{_h.get('section')}  · chunk_id={_h.get('chunk_id','')[:8]}")
+                    st.caption("※ 참고 컨텍스트로만 사용 — 출력 코드는 golden_modules 기반입니다.")
+
+            # 적용된 역할/바인딩 요약
+            with st.expander("적용된 역할·바인딩 요약", expanded=False):
                 st.text(_res.get("pinmap_summary", ""))
 
-            # 각 모듈 코드 보기 + 다운로드
-            for mod_name, mod_code in _mods.items():
-                with st.expander(f"📄 {mod_name} 적응 코드", expanded=False):
+            # 원본 golden 모듈 미리보기
+            with st.expander("Golden Module 원본 (.c/.h)", expanded=False):
+                for mod_name, mod_code in _mods.items():
                     _tabs = st.tabs([f"{mod_name}.h", f"{mod_name}.c"])
                     with _tabs[0]:
                         st.code(mod_code.get("h", ""), language="c")
                     with _tabs[1]:
                         st.code(mod_code.get("c", ""), language="c")
 
-                col_h, col_c, _ = st.columns([1, 1, 3])
-                with col_h:
-                    st.download_button(
-                        f"⬇ {mod_name}.h",
-                        data=mod_code.get("h", "").encode(),
-                        file_name=f"{mod_name}.h",
-                        mime="text/plain",
-                        key=f"dl_{mod_name}_h",
-                    )
-                with col_c:
-                    st.download_button(
-                        f"⬇ {mod_name}.c",
-                        data=mod_code.get("c", "").encode(),
-                        file_name=f"{mod_name}.c",
-                        mime="text/plain",
-                        key=f"dl_{mod_name}_c",
-                    )
-
-            st.divider()
-
-            # ── HAL 코드에 주입 (Step 2 ZIP 업로드된 경우) ───────────────
-            _hal_zip_bytes = st.session_state.get("step3_hal_zip")
-            if _hal_zip_bytes:
-                st.subheader("HAL 코드에 적응 코드 주입")
-                from agent.step3_codegen_agent import Step3Agent as _S3A
-                _injected: Dict[str, bytes] = {}
-                try:
-                    with _zf.ZipFile(_io.BytesIO(_hal_zip_bytes)) as _src_zip:
-                        for _zname in _src_zip.namelist():
-                            _raw = _src_zip.read(_zname)
-                            try:
-                                _src_txt = _raw.decode("utf-8")
-                            except Exception:
-                                _injected[_zname] = _raw
-                                continue
-                            for _mn, _mc in _mods.items():
-                                _src_txt = _S3A.inject_into_marker(_src_txt, _mc.get("c", ""), "2")
-                                _src_txt = _S3A.inject_into_marker(_src_txt, _mc.get("h", ""), "Includes")
-                            _injected[_zname] = _src_txt.encode("utf-8")
-
-                    _inj_buf = _io.BytesIO()
-                    with _zf.ZipFile(_inj_buf, "w", _zf.ZIP_DEFLATED) as _out_zip:
-                        for _mn, _mc in _mods.items():
-                            _out_zip.writestr(f"Step3_Modules/{_mn}.h", _mc.get("h", ""))
-                            _out_zip.writestr(f"Step3_Modules/{_mn}.c", _mc.get("c", ""))
-                        for _zname, _data in _injected.items():
-                            _out_zip.writestr(_zname, _data)
-
-                    st.success("주입 완료 — HAL 코드 + Step 3 모듈 통합 ZIP")
-                    st.download_button(
-                        "⬇ 통합 ZIP 다운로드 (HAL + Step 3)",
-                        data=_inj_buf.getvalue(),
-                        file_name=f"{vp3.get('chip','STM32G4')}_Integrated.zip",
-                        mime="application/zip",
-                        key="dl_integrated_zip",
-                    )
-                except Exception as _ie:
-                    st.error(f"주입 오류: {_ie}")
-            else:
-                st.info("Step 2 HAL 코드 ZIP을 업로드하면 USER CODE 마커에 자동 주입된 통합 ZIP을 다운로드할 수 있습니다.")
-
-            # ── 적응 모듈만 ZIP 다운로드 ─────────────────────────────────
+            # 모듈 + glue 스니펫만 ZIP (주입 안 된 경우 수동 통합용)
             _zbuf = _io.BytesIO()
             with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
                 for _mn, _mc in _mods.items():
-                    _z.writestr(f"{_mn}.h", _mc.get("h", ""))
-                    _z.writestr(f"{_mn}.c", _mc.get("c", ""))
+                    _z.writestr(f"modules/{_mn}.h", _mc.get("h", ""))
+                    _z.writestr(f"modules/{_mn}.c", _mc.get("c", ""))
+                for _mk, _code in _glue.items():
+                    _z.writestr(f"glue/USER_CODE_{_mk}.c", _code)
             st.download_button(
-                "⬇ 적응 모듈만 ZIP 다운로드",
+                "⬇ 모듈 + glue 스니펫만 ZIP",
                 data=_zbuf.getvalue(),
                 file_name=f"{vp3.get('chip','STM32G4')}_Step3_Modules.zip",
                 mime="application/zip",

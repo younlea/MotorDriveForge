@@ -189,22 +189,76 @@ def get_agent() -> ReviewAgent:
 def get_step3_agent() -> Step3Agent:
     global _step3_agent
     if _step3_agent is None:
-        _step3_agent = Step3Agent(ollama_url=OLLAMA_URL)
+        _step3_agent = Step3Agent(ollama_url=OLLAMA_URL, qdrant_url=QDRANT_URL)
     return _step3_agent
 
 
-def _run_step3_job(job_id: str, vp: Dict[str, Any], prompt: str = "") -> None:
+def _obtain_hal_project(
+    job_id: str, vp: Dict[str, Any], auto_generate: bool, hal_zip_b64: str,
+    work_root: Path, cb,
+) -> Tuple[Optional[Path], str]:
+    """Step3용 HAL 프로젝트 확보 — CubeMX CLI 우선, 실패 시 업로드 ZIP 폴백.
+
+    반환: (project_dir | None, 출처 메시지)
+    """
+    # 1) CubeMX CLI 자동 생성 (우선)
+    if auto_generate and _find_cubemx():
+        cb(8, "CubeMX CLI로 HAL 프로젝트 생성 중...")
+        chip = vp.get("chip", "STM32G474RETx")
+        pins = vp.get("pins", [])
+        ioc_text = "\n".join(_build_ioc_content(chip, vp, pins))
+        ioc_path = IOC_OUTPUT_DIR / f"{chip}_{job_id}.ioc"
+        ioc_path.write_text(ioc_text, encoding="utf-8")
+        out_dir = work_root / "cli_project"
+        ok, msg = _run_cubemx_headless(ioc_path, out_dir)
+        if ok:
+            root = next((mc.parents[2] for mc in out_dir.rglob("main.c")
+                         if mc.parent.name == "Src"), out_dir)
+            return root, "CubeMX CLI 자동 생성"
+        logger.warning("Step3 CLI 생성 실패, 업로드 폴백: %s", msg)
+
+    # 2) 업로드 ZIP 폴백
+    if hal_zip_b64:
+        cb(8, "업로드된 HAL 프로젝트 ZIP 사용...")
+        from agent.step3_codegen_agent import load_project_from_zip
+        zip_bytes = base64.b64decode(hal_zip_b64)
+        root = load_project_from_zip(zip_bytes, work_root / "uploaded")
+        return root, "업로드 ZIP"
+
+    # 3) 프로젝트 없음 — 모듈+glue만 (주입 없음)
+    return None, "프로젝트 없음 (모듈+glue만 생성)"
+
+
+def _run_step3_job(
+    job_id: str, vp: Dict[str, Any], prompt: str = "",
+    auto_generate: bool = True, hal_zip_b64: str = "",
+) -> None:
     """백그라운드 스레드에서 Step 3 파이프라인 실행."""
     def _cb(pct: int, msg: str) -> None:
         _step3_jobs[job_id].update({"progress": pct, "message": msg})
 
     _step3_jobs[job_id] = {"status": "running", "progress": 0, "message": "시작 중...", "result": None}
+    work_root = CODE_OUTPUT_DIR / f"step3_{job_id}"
+    work_root.mkdir(parents=True, exist_ok=True)
     try:
-        result = get_step3_agent().run(vp, prompt=prompt, progress_cb=_cb)
+        project_dir, src_msg = _obtain_hal_project(
+            job_id, vp, auto_generate, hal_zip_b64, work_root, _cb)
+        result = get_step3_agent().run(
+            vp, prompt=prompt, project_dir=project_dir, progress_cb=_cb)
+        result["project_source"] = src_msg
+
+        # 통합 프로젝트가 있으면 ZIP으로 패키징 → 다운로드 제공
+        if project_dir is not None and project_dir.exists():
+            chip = vp.get("chip", "STM32G4")
+            zip_name = f"{chip}_Integrated_{job_id}.zip"
+            _zip_directory(project_dir, zip_name)
+            result["integrated_zip"] = zip_name
+            result["integrated_download_url"] = f"/v1/download-step3/{zip_name}"
+
         _step3_jobs[job_id].update({
             "status": "complete",
             "progress": 100,
-            "message": "Step 3 완료",
+            "message": f"Step 3 완료 ({src_msg})",
             "result": result,
         })
     except Exception as e:
@@ -215,6 +269,9 @@ def _run_step3_job(job_id: str, vp: Dict[str, Any], prompt: str = "") -> None:
             "message": str(e),
             "result": None,
         })
+    finally:
+        # 통합 ZIP은 CODE_OUTPUT_DIR 루트에 별도 저장됨 — 작업 디렉토리는 정리
+        shutil.rmtree(work_root, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -751,11 +808,14 @@ async def cubemx_status():
 class Step3Request(BaseModel):
     validated_pins: Dict[str, Any]
     prompt: str = ""
+    auto_generate: bool = True          # CubeMX CLI로 HAL 프로젝트 자동 생성 시도
+    hal_zip_b64: str = ""               # CLI 미설치/실패 시 사용자 업로드 프로젝트 ZIP(base64)
 
 
 @app.post("/v1/generate-step3", tags=["Step 3"])
 async def generate_step3(request: Step3Request):
-    """Golden Module 선택 → LLM 적응 → 결과 반환 (백그라운드 job).
+    """Golden Module 선택 → 결정론 바인딩 + RAG + glue 생성 → (프로젝트 있으면) 주입.
+    HAL 프로젝트는 CubeMX CLI 자동 생성 우선, 실패 시 업로드 ZIP 폴백.
     반환: {job_id, selected_modules}
     """
     from agent.step3_codegen_agent import select_modules
@@ -768,9 +828,22 @@ async def generate_step3(request: Step3Request):
         "message": f"대기 중 — 선택 모듈: {', '.join(selected)}",
         "result": None,
     }
-    t = threading.Thread(target=_run_step3_job, args=(job_id, vp, request.prompt), daemon=True)
+    t = threading.Thread(
+        target=_run_step3_job,
+        args=(job_id, vp, request.prompt, request.auto_generate, request.hal_zip_b64),
+        daemon=True,
+    )
     t.start()
     return {"job_id": job_id, "selected_modules": selected}
+
+
+@app.get("/v1/download-step3/{filename}", tags=["Step 3"])
+async def download_step3(filename: str):
+    """Step 3 통합 프로젝트 ZIP 다운로드."""
+    path = CODE_OUTPUT_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="파일이 존재하지 않습니다.")
+    return FileResponse(path=str(path), filename=filename, media_type="application/zip")
 
 
 @app.get("/v1/step3-status/{job_id}", tags=["Step 3"])

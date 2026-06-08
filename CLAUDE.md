@@ -63,9 +63,23 @@ A의 출력은 B의 쿼리 보강과 C의 컨텍스트에 모두 사용.
   자세히는 [[project_ioc_template_based]] [[project_cubemx_db_pinoptions]] 메모리.
 - **다중 MCU**: 핀맵 `mcu` 지정자 컬럼으로 그룹핑, MCU별 .ioc 생성. [[project_multi_mcu]]
 
-### 6. Step 3는 Golden Module 우선
-- 검증된 C/H 레퍼런스(`golden_modules/`)에서 **검색** → **사용자 pinmap에 적응** → **USER CODE 마커 사이 주입**
-- LLM이 처음부터 코드를 새로 쓰지 않음. 적응 작업만.
+### 6. Step 3는 Golden Module "바인딩 glue" 우선 (✅ 구현)
+- **핵심 통찰**: `golden_modules/*.c`는 이미 하드웨어 비종속 — 핸들을 구조체로 주입받음
+  (`DCMotor_TypeDef{ TIM_HandleTypeDef *htim; GPIO_TypeDef *dir_gpio; ... }`). 따라서 적응 =
+  모듈 내부 수정이 아니라 **실제 핸들/채널/GPIO로 구조체를 채우는 glue 코드를 `main.c`
+  USER CODE 마커에 생성**하는 것.
+- **결정론/LLM 분업**: 역할→핸들/채널 매핑(`map_roles`)·바인딩(`parse_hal_project`/`derive_binding`)은
+  **결정론**. LLM(`_llm_glue`)은 **알고리즘 구조·보호기능만**. LLM이 핸들 추측 금지.
+- **입력 계약**: ① `validated_pins`(MCU 단위) ② 자연어 prompt ③ 생성 HAL 프로젝트
+  (CubeMX CLI `_run_cubemx_headless` 자동생성 **우선**, 실패 시 사용자 ZIP 업로드 폴백).
+  생성 프로젝트가 핸들명·ADC채널·GPIO 라벨 매크로(`U_PWM_H_GPIO_Port`)·USER CODE 마커의 **ground truth**.
+- **코드 RAG**: `agent/step3_codegen_agent.rag_query_code`가 **별도 컬렉션 `stm32g4_code`**
+  (opensource 알고리즘) 검색 → glue 생성 LLM에 **참고 컨텍스트로만**(chunk_id 인용, **verbatim 복사 금지**).
+  소스는 `scripts/parse_opensource_algorithms.py` → `dataset/chunks_code/` →
+  `embed_and_index.py --chunks-dir dataset/chunks_code --collection stm32g4_code`.
+  **라이선스**: GPL(VESC/MESC) 코드는 `license` 태그로 구분, permissive(MIT/Apache/ST) 우선.
+- **통합**: `integrate()`가 모듈 `.c→Core/Src`/`.h→Core/Inc` 복사 + Makefile(`C_SOURCES`)/CMake 등록
+  + `main.c` 4개 마커(Includes/PV/2/3) 주입. 모두 idempotent. [[project_step3_glue]]
 
 ---
 
@@ -91,7 +105,9 @@ MotorDriveForge/
 │   ├── parse_pdfs.py / chunk_docs.py / embed_and_index.py / build_bm25.py
 │   ├── parse_cubemx_db.py          # 🆕 CubeMX db/mcu/*.xml → agent/pin_options/ (핀 AF·풀네임)
 │   ├── parse_datasheet_io.py       # 🆕 ST 데이터시트 → agent/pin_io_structure.json (FT/TT)
-│   ├── parse_opensource_code.py / scrape_st_forum.py
+│   ├── parse_opensource_code.py     # opensource → 핀 정보 청크 (Step1 RAG, stm32g4_docs)
+│   ├── parse_opensource_algorithms.py # 🆕 opensource → 알고리즘 청크 (Step3 코드 RAG, stm32g4_code)
+│   ├── scrape_st_forum.py
 │   └── scrape_ti_e2e.py            # 🆕 TODO
 │   # ※ dataset/STM32CubeMX/ (raw CubeMX DB ~600MB)는 .gitignore — 파생 JSON만 커밋
 ├── dataset/
@@ -99,6 +115,8 @@ MotorDriveForge/
 │   ├── official_docs/errata/       # 🆕 G4 errata 명시적 분리
 │   ├── forum_qa/                   # ST + TI E2E
 │   ├── opensource/                 # submodules
+│   ├── chunks/                     # Step1 RAG 청크 → stm32g4_docs
+│   ├── chunks_code/               # 🆕 Step3 코드 RAG 청크 → stm32g4_code (Step1과 분리)
 │   └── synthetic/                  # 🆕 합성 망가진 스키매틱
 ├── work/                           # 워크플로우 기획 문서
 │   ├── step1_workflow/

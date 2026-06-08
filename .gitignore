@@ -33,3 +33,7 @@ files.zip
 # 빌드
 dist/
 build/
+
+# Step3 코드 RAG 청크 — opensource 알고리즘 코드 발췌(특히 GPL) 포함.
+# 라이선스상 리포에 커밋 금지. parse_opensource_algorithms.py로 로컬 재생성.
+dataset/chunks_code/

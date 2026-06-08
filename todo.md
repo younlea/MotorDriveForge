@@ -22,10 +22,21 @@
       function없는핀/고아주변장치 강등, SH 매핑) — 메모리 `project_ioc_template_based` 참조
 - [x] CubeMX DB(db/mcu/*.xml) → `agent/pin_options/`, 데이터시트 → `agent/pin_io_structure.json`
 
+**Step 3 — Golden Module "바인딩 glue" 재설계 (✅ 구현, Spark 검증 대기)**
+- [x] 결정론 역할 매퍼 `map_roles`(PWM/ENC/전류/DIR/BRK/FDCAN) — flat·다중 MCU(MCU별 처리) 대응
+- [x] 생성 HAL 프로젝트 파서 `parse_hal_project`(핸들/GPIO라벨매크로/ADC채널/USER CODE 마커)
+      + 결정론 폴백 `derive_binding`(프로젝트 없을 때)
+- [x] glue 생성 `_llm_glue` — 모듈 내부 미변경, 구조체 바인딩 4블록(Includes/PV/2/3)
+- [x] 코드 RAG `rag_query_code`(stm32g4_code) + `parse_opensource_algorithms.py`(957청크, 라이선스 태그)
+- [x] 통합 `integrate` — 모듈 복사 + Makefile/CMake 등록 + main.c 주입(idempotent)
+- [x] 백엔드: CLI 자동생성 우선→업로드 폴백, 통합 ZIP 다운로드. 프론트 Tab3 재구성
+- [ ] **Spark 검증**: `embed_and_index.py --chunks-dir dataset/chunks_code --collection stm32g4_code` 후
+      실제 CubeMX 프로젝트로 glue 생성·빌드성(arm-none-eabi-gcc) 확인
+
 **다음 작업**
-- [ ] **Step 3 — Golden Module 적응을 다중 MCU·최신 핀맵에 연동** (현재 flat 핀맵 기준)
 - [ ] (선택) .ioc RCC 기본을 보수적(16MHz HSI)으로 — G431 USB/RNG 클럭 경고 정리
 - [ ] 동시 사용자: 전역 상태(`_review_partial`) 요청별 분리 (동시 검증 충돌 방지)
+- [ ] STM32CubeG4 청크 상한(400) 도달 시 HAL 예제 보일러플레이트 우선순위 하향(품질 개선)
 
 ---
 
