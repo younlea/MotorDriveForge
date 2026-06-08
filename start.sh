@@ -9,6 +9,7 @@
 #   ./start.sh status     # 서비스 상태 확인
 #   ./start.sh logs       # 전체 로그 스트리밍
 #   ./start.sh dev        # 개발 모드 (Qdrant=Docker, Backend/Frontend=Python)
+#   ./start.sh ingest     # Step3 코드 RAG(stm32g4_code) 강제 재인제스천
 #
 # 환경변수 (선택):
 #   OLLAMA_URL=http://...   Ollama 주소 (기본: http://host.docker.internal:11434)
@@ -82,6 +83,33 @@ show_urls() {
     info "로그: ./start.sh logs"
     info "종료: ./start.sh stop"
     echo ""
+}
+
+# ── 코드 RAG 인제스천 (Step3, stm32g4_code) ──────────────────────────────────
+# 호스트에 python 불필요 — 이미 deps를 가진 backend 컨테이너 안에서 실행한다.
+# (docker-compose가 scripts/·dataset/를 backend에 마운트, qdrant는 compose 네트워크명으로 접근)
+QDRANT_HTTP="${QDRANT_HTTP:-http://localhost:6333}"
+
+code_rag_points() {
+    curl -s "$QDRANT_HTTP/collections/stm32g4_code" 2>/dev/null \
+        | grep -o '"points_count":[0-9]*' | head -1 | grep -o '[0-9]*' || true
+}
+
+cmd_ingest_code() {
+    local force="${1:-}"
+    local pts; pts="$(code_rag_points)"
+    if [ -z "$force" ] && [ -n "$pts" ] && [ "$pts" -gt 0 ] 2>/dev/null; then
+        ok "코드 RAG(stm32g4_code) 이미 적재됨 (${pts} points) — 인제스천 건너뜀"
+        return 0
+    fi
+    info "코드 RAG 인제스천 (opensource 알고리즘 → stm32g4_code)..."
+    docker compose -f "$COMPOSE_FILE" exec -T -w /app backend \
+        python3 scripts/parse_opensource_algorithms.py
+    docker compose -f "$COMPOSE_FILE" exec -T -w /app backend \
+        python3 scripts/embed_and_index.py \
+            --chunks-dir dataset/chunks_code --collection stm32g4_code \
+            --qdrant-url http://qdrant:6333
+    ok "코드 RAG 인제스천 완료"
 }
 
 # ── STATUS ───────────────────────────────────────────────────────────────────
@@ -188,6 +216,9 @@ EOF
         ok "모든 서비스 준비 완료"
     fi
 
+    # Step3 코드 RAG 인덱스 보장 (idempotent — 비어있을 때만 인제스천)
+    cmd_ingest_code || warn "코드 RAG 인제스천 실패 — Step3는 RAG 없이도 동작하나 품질 저하 가능"
+
     show_urls
 }
 
@@ -261,10 +292,11 @@ case "$MODE" in
     dev)        cmd_dev    ;;
     stop)       cmd_stop   ;;
     status)     cmd_status ;;
+    ingest)     check_docker; cmd_ingest_code force ;;
     restart)    cmd_stop; sleep 2; cmd_docker ;;
     logs)       check_docker; docker compose -f "$COMPOSE_FILE" logs -f ;;
     *)
-        echo "사용법: $0 [docker|dev|stop|status|restart|logs]"
+        echo "사용법: $0 [docker|dev|stop|status|restart|logs|ingest]"
         exit 1
         ;;
 esac
