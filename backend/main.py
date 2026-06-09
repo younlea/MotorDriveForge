@@ -212,9 +212,8 @@ def _obtain_hal_project(
         out_dir = work_root / "cli_project"
         ok, msg = _run_cubemx_headless(ioc_path, out_dir)
         if ok:
-            root = next((mc.parents[2] for mc in out_dir.rglob("main.c")
-                         if mc.parent.name == "Src"), out_dir)
-            return root, "CubeMX CLI 자동 생성"
+            from agent.step3_codegen_agent import find_project_root
+            return find_project_root(out_dir), "CubeMX CLI 자동 생성"
         logger.warning("Step3 CLI 생성 실패, 업로드 폴백: %s", msg)
 
     # 2) 업로드 ZIP 폴백

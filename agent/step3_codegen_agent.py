@@ -297,19 +297,38 @@ def parse_hal_project(project_dir: Path) -> Dict[str, Any]:
     }
 
 
+def find_project_root(base: Path) -> Path:
+    """추출/생성된 디렉토리에서 실제 프로젝트 루트를 찾는다.
+    zip이 단일 폴더로 감싸져 있으면(예: MyProj/...) 그 폴더가 루트, 아니면 base 자체.
+    → 업로드 구조(Core/Src·Src·Drivers·Makefile·.ioc 등)를 통째로 보존한다."""
+    entries = [p for p in base.iterdir() if not p.name.startswith("__MACOSX")]
+    subdirs = [p for p in entries if p.is_dir()]
+    files = [p for p in entries if p.is_file()]
+    if len(subdirs) == 1 and not files:
+        return subdirs[0]
+    return base
+
+
+def _project_layout(project_dir: Path) -> Tuple[Path, Path]:
+    """모듈 .c/.h를 둘 위치 (src_dir, inc_dir). CubeMX 레이아웃 자동 감지:
+    Core/Src+Core/Inc (IDE 프로젝트) → Src+Inc (Makefile 프로젝트) → main.c가 있는 폴더."""
+    for src_name, inc_name in (("Core/Src", "Core/Inc"), ("Src", "Inc")):
+        s = project_dir / src_name
+        if s.exists():
+            i = project_dir / inc_name
+            return s, (i if i.exists() else s)
+    mc = next(iter(project_dir.rglob("main.c")), None)
+    if mc:
+        return mc.parent, mc.parent
+    return project_dir, project_dir
+
+
 def load_project_from_zip(zip_bytes: bytes, dest_dir: Path) -> Path:
-    """업로드 ZIP을 dest_dir에 풀고 프로젝트 루트 경로 반환."""
+    """업로드 ZIP을 dest_dir에 풀고 프로젝트 루트 경로 반환(구조 보존)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         zf.extractall(dest_dir)
-    # main.c가 들어있는 디렉토리의 상위(=프로젝트 루트) 추정
-    for mc in dest_dir.rglob("main.c"):
-        # .../Core/Src/main.c → 루트는 Core의 부모
-        for parent in mc.parents:
-            if parent.name == "Core":
-                return parent.parent
-        return mc.parent
-    return dest_dir
+    return find_project_root(dest_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -523,21 +542,24 @@ class Step3Agent:
         """프로젝트 디렉토리(in-place)에 golden 모듈을 추가하고 glue를 주입."""
         report: Dict[str, Any] = {"copied": [], "build_registered": None, "injected_markers": []}
 
-        core_src = project_dir / "Core" / "Src"
-        core_inc = project_dir / "Core" / "Inc"
-        src_dir = core_src if core_src.exists() else project_dir
-        inc_dir = core_inc if core_inc.exists() else project_dir
+        src_dir, inc_dir = _project_layout(project_dir)
+        src_dir.mkdir(parents=True, exist_ok=True)
+        inc_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) 모듈 파일 복사
+        # 1) 모듈 파일 복사 + 등록용 상대 .c 경로 수집
+        copied_c_rel: List[str] = []
         for name in modules:
             for ext, dst in (("c", src_dir), ("h", inc_dir)):
                 srcf = GOLDEN_DIR / f"{name}.{ext}"
                 if srcf.exists():
                     shutil.copy2(srcf, dst / srcf.name)
-                    report["copied"].append(str((dst / srcf.name).relative_to(project_dir)))
+                    rel = (dst / srcf.name).relative_to(project_dir)
+                    report["copied"].append(str(rel))
+                    if ext == "c":
+                        copied_c_rel.append(rel.as_posix())
 
-        # 2) 빌드시스템 등록 (Makefile C_SOURCES 또는 CMakeLists)
-        report["build_registered"] = self._register_build(project_dir, modules, src_dir)
+        # 2) 빌드시스템 등록 (실제 복사 위치의 상대경로 사용)
+        report["build_registered"] = self._register_build(project_dir, copied_c_rel)
 
         # 3) main.c 마커 주입
         main_c = next(iter(project_dir.rglob("main.c")), None)
@@ -553,9 +575,11 @@ class Step3Agent:
 
         return report
 
-    def _register_build(self, project_dir: Path, modules: List[str], src_dir: Path) -> str:
-        """Makefile(C_SOURCES) 또는 CMakeLists에 모듈 .c 등록. idempotent."""
-        rel_srcs = [f"Core/Src/{m}.c" for m in modules]
+    def _register_build(self, project_dir: Path, rel_srcs: List[str]) -> str:
+        """Makefile(C_SOURCES) 또는 CMakeLists에 모듈 .c 등록. idempotent.
+        rel_srcs: 프로젝트 루트 기준 모듈 .c 상대경로(레이아웃에 맞게 계산됨)."""
+        if not rel_srcs:
+            return "none (등록할 .c 없음)"
 
         makefile = next((p for p in project_dir.rglob("Makefile")), None)
         if makefile:
