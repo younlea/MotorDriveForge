@@ -228,6 +228,14 @@ def _obtain_hal_project(
     return None, "프로젝트 없음 (모듈+glue만 생성)"
 
 
+def _step3_project_name(project_dir: Path, chip: str) -> str:
+    """통합 ZIP 최상위 폴더/파일명 — .ioc(CubeMX 프로젝트명) 우선, 없으면 칩명+_MotorDrive."""
+    ioc = next(iter(project_dir.rglob("*.ioc")), None)
+    raw = ioc.stem if ioc else f"{chip or 'STM32G4'}_MotorDrive"
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw).strip("_")
+    return safe or "STM32G4_MotorDrive"
+
+
 def _run_step3_job(
     job_id: str, vp: Dict[str, Any], prompt: str = "",
     auto_generate: bool = True, hal_zip_b64: str = "",
@@ -246,11 +254,13 @@ def _run_step3_job(
             vp, prompt=prompt, project_dir=project_dir, progress_cb=_cb)
         result["project_source"] = src_msg
 
-        # 통합 프로젝트가 있으면 ZIP으로 패키징 → 다운로드 제공
+        # 통합 프로젝트가 있으면 ZIP으로 패키징 → 다운로드 제공.
+        # 최상위 폴더명을 프로젝트명(.ioc 이름) 또는 칩명으로 통일 — 업로드 zip에 래퍼 폴더가
+        # 있든 없든(임시폴더명 노출 방지) 항상 동일하게 나오도록.
         if project_dir is not None and project_dir.exists():
-            chip = vp.get("chip", "STM32G4")
-            zip_name = f"{chip}_Integrated_{job_id}.zip"
-            _zip_directory(project_dir, zip_name)
+            proj_name = _step3_project_name(project_dir, vp.get("chip", "STM32G4"))
+            zip_name = f"{proj_name}_{job_id}.zip"
+            _zip_directory(project_dir, zip_name, arc_root=proj_name)
             result["integrated_zip"] = zip_name
             result["integrated_download_url"] = f"/v1/download-step3/{zip_name}"
 
@@ -723,13 +733,21 @@ def _run_cubemx_headless(ioc_path: Path, output_dir: Path) -> Tuple[bool, str]:
         os.unlink(script_path)
 
 
-def _zip_directory(src_dir: Path, zip_name: str) -> Path:
-    """디렉토리를 ZIP으로 묶어 CODE_OUTPUT_DIR에 저장."""
+def _zip_directory(src_dir: Path, zip_name: str, arc_root: Optional[str] = None) -> Path:
+    """디렉토리를 ZIP으로 묶어 CODE_OUTPUT_DIR에 저장.
+
+    arc_root: 지정하면 ZIP 최상위 폴더명을 이 이름으로 통일(업로드 래퍼 유무·임시폴더명 무관).
+              미지정이면 기존 동작(src_dir 폴더명을 최상위로).
+    """
     zip_path = CODE_OUTPUT_DIR / zip_name
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in src_dir.rglob("*"):
             if file.is_file():
-                zf.write(file, file.relative_to(src_dir.parent))
+                if arc_root:
+                    arcname = Path(arc_root) / file.relative_to(src_dir)
+                else:
+                    arcname = file.relative_to(src_dir.parent)
+                zf.write(file, arcname)
     return zip_path
 
 
