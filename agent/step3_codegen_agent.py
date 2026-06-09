@@ -188,6 +188,44 @@ def map_roles(vp: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def check_required_peripherals(
+    roles: Dict[str, Any], project_handles: Optional[Dict[str, str]],
+) -> Tuple[List[str], List[str]]:
+    """roles가 요구하는 주변장치(TIM/ADC/OPAMP/FDCAN)가 업로드 프로젝트에 실제 설정돼 있는지 점검.
+
+    project_handles: parse_hal_project가 읽은 {periph:handle} (예: {'TIM3':'htim3'}).
+        None이면(프로젝트 없음) 점검 불가 → 빈 결과.
+    반환: (missing_periph[...], 사용자용 경고 메시지[...]).
+    빠진 주변장치가 있으면 golden 모듈/glue가 TIM_HandleTypeDef·htimN·TIM_CHANNEL_x 등을
+    참조하므로 빌드 에러가 난다(HAL 모듈 미활성 + tim.c 미생성).
+    """
+    if project_handles is None:
+        return [], []
+    required: Dict[str, str] = {}
+    if roles.get("pwm_timer"):
+        required[roles["pwm_timer"]] = "PWM 타이머"
+    if roles.get("enc_timer"):
+        required[roles["enc_timer"]] = "엔코더 타이머"
+    if roles.get("fdcan"):
+        required[roles["fdcan"]] = "FDCAN"
+    for c in roles.get("current_sense", []):
+        required[c["periph"]] = "전류 센싱"
+    have = set(project_handles or {})
+    missing = [(p, role) for p, role in required.items() if p not in have]
+    msgs: List[str] = []
+    for p, role in missing:
+        msgs.append(
+            f"{p}({role})가 업로드한 CubeMX 프로젝트에 설정돼 있지 않습니다 — "
+            f"tim.c/adc.c 등 init과 핸들(h{p.lower()})이 없어 모듈/glue가 빌드되지 않습니다."
+        )
+    if missing:
+        msgs.append(
+            "해결: Step 2의 .ioc(주변장치가 활성화됨)로 CubeMX에서 코드 생성한 프로젝트를 "
+            "업로드하세요. (빈/GPIO만 있는 프로젝트로는 모터 모듈을 통합할 수 없습니다.)"
+        )
+    return [p for p, _ in missing], msgs
+
+
 def _label_macro(label: str) -> str:
     """CubeMX가 라벨로 만드는 매크로 베이스명. 'CURR_U' → 'CURR_U'(_Pin/_GPIO_Port 접미)."""
     s = re.sub(r"[^A-Za-z0-9]", "_", label).strip("_")
@@ -632,9 +670,11 @@ class Step3Agent:
         _cb(12, f"모듈 선택: {', '.join(selected)}")
 
         # 2) 바인딩: 프로젝트 우선, 없으면 결정론 유도
+        proj_handles: Optional[Dict[str, str]] = None
         if project_dir is not None:
             _cb(18, "생성 프로젝트 파싱(핸들/매크로/ADC) 중...")
             binding = parse_hal_project(project_dir)
+            proj_handles = dict(binding["handles"])   # 프로젝트 실제 핸들(보완 병합 전)
             # 프로젝트에 없는 핸들은 결정론 유도로 보완
             derived = derive_binding(roles, vp)
             for k, v in derived["handles"].items():
@@ -644,6 +684,12 @@ class Step3Agent:
         else:
             binding = derive_binding(roles, vp)
         roles_summary = _roles_summary(vp, roles, binding)
+
+        # 2.5) 주변장치 사전 점검 — roles가 요구하는 TIM/ADC/OPAMP/FDCAN이 업로드 프로젝트에
+        #      실제로 설정돼 있는지(=핸들 존재). 없으면 모듈/glue가 컴파일 안 됨(빌드에러).
+        periph_missing, periph_warnings = check_required_peripherals(roles, proj_handles)
+        for _w in periph_warnings:
+            _cb(20, f"⚠ {_w}")
 
         # 3) 코드 RAG (opensource 알고리즘 참고)
         _cb(30, "코드 RAG 검색 중...")
@@ -692,4 +738,8 @@ class Step3Agent:
             "modules": modules_out,
             "integration": integration,
             "pinmap_summary": roles_summary,
+            "peripheral_missing": periph_missing,
+            "peripheral_warnings": periph_warnings,
+            # 빌드 가능 추정: 프로젝트가 있고 필요한 주변장치가 모두 존재할 때만.
+            "buildable": (project_dir is not None and not periph_missing),
         }

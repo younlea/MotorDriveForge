@@ -2071,11 +2071,22 @@ with tab3:
             st.success(f"완료 — 모듈 {len(_mods)}개 + glue {len(_glue)}블록 생성 "
                        f"(프로젝트: {_src_msg})")
 
+            # 주변장치 사전 점검 경고 — 업로드 프로젝트에 TIM/ADC/OPAMP 등이 없으면 빌드 실패
+            _pwarn = _res.get("peripheral_warnings", [])
+            if _pwarn:
+                st.error("⚠️ 이 통합 프로젝트는 **그대로 빌드되지 않습니다** — 업로드한 CubeMX "
+                         "프로젝트에 모터 구동에 필요한 주변장치가 설정돼 있지 않습니다.")
+                for _w in _pwarn:
+                    st.markdown(f"- {_w}")
+                st.info("정리: **Step 2에서 만든 .ioc**(타이머/ADC/OPAMP/FDCAN이 활성화됨)를 "
+                        "CubeMX에서 열어 **Generate Code** 한 결과물을 업로드하면 핸들(htimN 등)이 "
+                        "생겨 빌드됩니다. 빈/GPIO만 있는 프로젝트로는 통합이 불가합니다.")
+
             # 통합 프로젝트 ZIP (백엔드가 주입까지 완료한 경우)
             _intg_url = _res.get("integrated_download_url")
             if _intg_url:
                 _intg = _res.get("integration") or {}
-                st.subheader("빌드 가능한 통합 프로젝트")
+                st.subheader("통합 프로젝트" + (" (빌드 가능)" if _res.get("buildable") else " (주변장치 보강 필요)"))
                 st.caption(
                     f"복사: {len(_intg.get('copied', []))}개 파일 · "
                     f"빌드등록: {_intg.get('build_registered')} · "
