@@ -623,6 +623,22 @@ def _begin_extract(data: dict, files: list) -> None:
     t.start()
 
 
+def _extract_handoff() -> None:
+    """워커 완료 시 _extract_store → session_state로 옮기고 rerun (확정/이미지 화면 공용).
+    옮긴 뒤 상단 결과 핸들러가 페리페럴/핀맵을 반영한다."""
+    if not st.session_state.get("_extract_running"):
+        return
+    _ejob = st.session_state.get("_extract_job_id")
+    _estore = st.session_state.get("_extract_store") or {}
+    _edone = _estore.pop(_ejob, None) if _ejob else None
+    if _edone is not None:
+        st.session_state._extract_result = _edone["result"]
+        if _edone["error"]:
+            st.session_state._extract_error = _edone["error"]
+        st.session_state._extract_running = False
+        st.rerun()
+
+
 def _begin_review(data: dict, files: list) -> None:
     """검증 백그라운드 시작 + 이전 결과/상태 초기화 (직접 CSV 경로·확정 경로 공용)."""
     st.session_state._rv_running = True
@@ -937,6 +953,19 @@ with tab1:
 
     # ── 확정 단계: Vision 추출 핀맵을 검토·수정 후 ② 검증 ────────────────
     elif in_confirm:
+        # 이 화면에서도 Vision 외부부품 추출을 돌릴 수 있다(핀맵은 현재 것 유지).
+        # 추출 진행 중이면 완료 핸드오프 + 진행 표시 후 폴링.
+        if st.session_state.get("_extract_running"):
+            _extract_handoff()
+            _el = int(time.time() - st.session_state.get("_extract_start", time.time()))
+            st.info(f"🔍 Vision으로 외부부품 추출 중… ({_el}초 경과). 완료되면 페리페럴이 채워집니다.")
+            if st.button("✖ 추출 취소", key="btn_confirm_extract_cancel"):
+                st.session_state._extract_active = False
+                st.session_state._extract_running = False
+                st.rerun()
+            time.sleep(2)
+            st.rerun()
+
         st.markdown("### ✅ 추출된 핀맵 검토 · 수정")
         st.caption("Vision이 회로도에서 추출한 결과입니다. 오인식(예: OSC 핀)을 바로잡고 검증하세요.")
         try:
@@ -1028,6 +1057,27 @@ with tab1:
             placeholder="- 게이트 드라이버: ...\n- 전류 감지: ...\n- 보호: ...\n- 전원: ...",
         )
 
+        # 핀맵은 위 표 그대로 두고, 회로도 이미지가 있으면 Vision+프롬프트로 외부부품만 추출.
+        # (이미 확정한 핀맵에 외부부품 정보를 보강하는 용도 — 필요 없으면 그냥 검증으로 진행)
+        if has_image:
+            if st.button("🔍 Vision으로 외부부품/페리페럴 추출 (위 핀맵 유지)",
+                         key="btn_confirm_vision", use_container_width=True,
+                         help="업로드/붙여넣은 회로도에서 게이트드라이버·전류감지·보호·전원 등을 추출해 "
+                              "위 페리페럴 칸을 채웁니다. 핀맵은 현재 표를 그대로 사용합니다."):
+                if not prompt.strip():
+                    st.error("프롬프트를 입력하세요.")
+                else:
+                    # 현재 검토 중인 핀맵을 override로 넘겨 추출 후에도 핀맵이 유지되게 한다.
+                    st.session_state._extract_csv_override = edited_df.to_csv(index=False)
+                    st.session_state._extract_csv_chip = (
+                        st.session_state.confirm_chip or _primary_chip or "")
+                    _ex_data = {"prompt": prompt, "chip": "" if chip == AUTO_CHIP else chip}
+                    _begin_extract(_ex_data, _image_files())
+                    st.rerun()
+        else:
+            st.caption("ℹ️ 회로도 이미지를 업로드/붙여넣으면 Vision으로 외부부품을 자동 추출할 수 있습니다 "
+                       "(핀맵은 위 표 유지). 필요 없으면 그대로 검증을 진행하세요.")
+
         if st.session_state.confirm_vision_analysis:
             with st.expander("Vision 분석 요약", expanded=False):
                 st.markdown(st.session_state.confirm_vision_analysis[:800])
@@ -1059,16 +1109,7 @@ with tab1:
     # ── 이미지 입력: ① Vision 추출 → 검토 (백그라운드) ──────────────────
     elif has_image:
         if st.session_state.get("_extract_running"):
-            # 워커 완료 핸드오프 (메인 스레드에서 session_state로 옮김) — _rv_store와 동일 패턴
-            _ejob = st.session_state.get("_extract_job_id")
-            _estore = st.session_state.get("_extract_store") or {}
-            _edone = _estore.pop(_ejob, None) if _ejob else None
-            if _edone is not None:
-                st.session_state._extract_result = _edone["result"]
-                if _edone["error"]:
-                    st.session_state._extract_error = _edone["error"]
-                st.session_state._extract_running = False
-                st.rerun()
+            _extract_handoff()  # 워커 완료를 메인 스레드에서 session_state로 옮김
             _el = int(time.time() - st.session_state.get("_extract_start", time.time()))
             st.info(f"🔍 Vision으로 핀맵 추출 중… ({_el}초 경과 · 회로도 장수에 따라 수 분). "
                     "완료되면 자동으로 검토 화면이 열립니다.")
