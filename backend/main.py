@@ -207,7 +207,8 @@ def _obtain_hal_project(
         chip = vp.get("chip", "STM32G474RETx")
         pins = vp.get("pins", [])
         ioc_text = "\n".join(_build_ioc_content(chip, vp, pins))
-        ioc_path = IOC_OUTPUT_DIR / f"{chip}_{job_id}.ioc"
+        # .ioc 이름 = 내부 ProjectName과 일치(안정) → 생성 프로젝트명도 일치
+        ioc_path = IOC_OUTPUT_DIR / f"{_chip_identity(chip)['user']}_MotorDrive.ioc"
         ioc_path.write_text(ioc_text, encoding="utf-8")
         out_dir = work_root / "cli_project"
         ok, msg = _run_cubemx_headless(ioc_path, out_dir)
@@ -569,7 +570,11 @@ async def generate_ioc(request: GenerateIocRequest):
     ioc_lines = _build_ioc_content(chip, vp, pins)
     ioc_text = "\n".join(ioc_lines)
 
-    filename = f"{chip}_{uuid.uuid4().hex[:8]}.ioc"
+    # ★ .ioc 파일명을 내부 ProjectName(_build_ioc_content의 {user}_MotorDrive)과 일치시킨다.
+    #   랜덤 uuid를 쓰면 재생성마다 이름이 바뀌어, 기존 CubeIDE 프로젝트(.project name)와
+    #   불일치 → CubeMX 플러그인이 루트 못 찾고 'getIdeHelper() null' 빌드 에러. 안정 이름으로 고정.
+    ident = _chip_identity(chip)
+    filename = f"{ident['user']}_MotorDrive.ioc"
     out_path = IOC_OUTPUT_DIR / filename
     out_path.write_text(ioc_text, encoding="utf-8")
 
@@ -577,7 +582,6 @@ async def generate_ioc(request: GenerateIocRequest):
 
     # 미검증 서브패밀리 경고 (플래시 그룹이 실제 .ioc로 미확인된 경우)
     msg = f".ioc 파일 생성 완료 ({len(pins)}핀)"
-    ident = _chip_identity(chip)
     if ident.get("verified") != "1":
         msg += (
             f" ⚠️ {ident['name']} 식별자는 미검증입니다(검증: G431/G474). "
@@ -782,11 +786,11 @@ async def generate_code(request: GenerateIocRequest):
             },
         )
 
-    # .ioc 파일 생성
+    # .ioc 파일 생성 — 이름은 내부 ProjectName과 일치(안정), 출력 디렉토리만 run_id로 격리
     ioc_lines = _build_ioc_content(chip, vp, pins)
     ioc_text = "\n".join(ioc_lines)
     run_id = uuid.uuid4().hex[:8]
-    ioc_filename = f"{chip}_{run_id}.ioc"
+    ioc_filename = f"{_chip_identity(chip)['user']}_MotorDrive.ioc"
     ioc_path = IOC_OUTPUT_DIR / ioc_filename
     ioc_path.write_text(ioc_text, encoding="utf-8")
 
