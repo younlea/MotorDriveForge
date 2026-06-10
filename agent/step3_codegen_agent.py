@@ -486,12 +486,13 @@ def detect_linked_libraries(project_dir: Path) -> Optional[str]:
     drv_srcs = list(project_dir.rglob("Drivers/**/*.c"))
     if linked and len(drv_srcs) < 3:
         return (
-            "이 CubeIDE 프로젝트는 HAL 드라이버를 '참조(링크)' 방식으로 포함합니다 "
-            "(Drivers 소스가 프로젝트에 복사돼 있지 않음). 프로젝트를 다른 위치에서 빌드하면 "
-            "HAL 소스를 못 찾아 'No rule to make target .../stm32g4xx_hal.c' 에러가 납니다. "
+            "이 프로젝트는 HAL 드라이버를 '참조(링크)' 방식으로 포함합니다 "
+            "(CubeMX의 'Add necessary library files as reference' 선택 — Drivers 소스가 "
+            "프로젝트에 복사돼 있지 않음). 다른 위치에서 빌드하면 HAL 소스를 못 찾아 "
+            "'No rule to make target .../stm32g4xx_hal.c' 에러가 납니다. "
             "해결: CubeMX → Project Manager → Code Generator → "
-            "'Copy all used libraries into the project folder'를 선택해 재생성하면 자체 포함되어 "
-            "어디서나 빌드됩니다. (또는 프로젝트를 생성 당시 위치 그대로 두고 빌드)"
+            "'Copy only the necessary library files'를 선택해 재생성하면 HAL 소스가 "
+            "프로젝트에 복사되어 어디서나 빌드됩니다."
         )
     return None
 
