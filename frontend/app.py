@@ -1778,8 +1778,14 @@ with tab2:
 1. **STM32CubeMX 실행**
 2. **File → Load Project** → 다운로드한 `.ioc` 파일 선택
 3. Pinout & Configuration 탭에서 핀 배치·페리페럴 설정 확인
-4. **Project → Generate Code** (단축키 `Alt+K`)
-5. 생성된 프로젝트 폴더를 **STM32CubeIDE / Keil / IAR** 에서 열기
+4. ⚠️ **Project Manager → Code Generator** 탭에서
+   **`Copy only the necessary library files`** 선택 *(중요)*
+   - `Add necessary library files as reference`(링크)로 두면 HAL 소스가 프로젝트에
+     복사되지 않아, 다른 위치에서 빌드 시 `No rule to make target ...stm32g4xx_hal.c`
+     에러가 납니다. Step 3 통합 프로젝트를 받아 바로 빌드하려면 **반드시 복사 모드**로 생성하세요.
+5. **Project → Generate Code** (단축키 `Alt+K`)
+6. 생성된 프로젝트 폴더를 **STM32CubeIDE / Keil / IAR** 에서 열기
+   (Step 3에 업로드할 경우 이 폴더를 ZIP으로 묶어 올리면 됩니다)
 """)
 
             st.divider()
@@ -1984,6 +1990,8 @@ with tab3:
             "HAL 프로젝트 ZIP 업로드 (CLI 폴백용 — Step 2에서 CubeMX로 생성한 결과물)",
             type=["zip"], key="s3_hal_zip",
         )
+        st.caption("⚠️ CubeMX 생성 시 **Code Generator → 'Copy only the necessary library files'**로 "
+                   "만든 프로젝트를 올리세요. 'reference(링크)'로 만들면 빌드 시 HAL 소스를 못 찾습니다.")
         if _hal_zip_up:
             st.session_state.step3_hal_zip = _hal_zip_up.read()
             st.success(f"ZIP 로드 완료 — {_hal_zip_up.name}")
