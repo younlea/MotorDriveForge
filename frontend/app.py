@@ -1878,7 +1878,8 @@ with tab3:
     from agent.step3_codegen_agent import select_modules as _select_modules
 
     _MOD_DESC = {
-        "dc_motor_pid":    "dc_motor_pid — DC/FOC/PMSM PID 제어 + H-bridge PWM",
+        "foc_pmsm":        "foc_pmsm — PMSM/BLDC FOC (Clarke/Park/SVPWM + 전류·속도 PI)",
+        "dc_motor_pid":    "dc_motor_pid — DC 브러시드 PID 제어 + H-bridge PWM",
         "bldc_6step_hall": "bldc_6step_hall — BLDC 6-step 홀센서 구동",
         "fdcan_motor_cmd": "fdcan_motor_cmd — FDCAN 커맨드 파싱 (1Mbps)",
         "multi_axis_sync": "multi_axis_sync — 다축 동기화",

@@ -65,11 +65,15 @@ def select_modules(vp: Dict[str, Any], roles: Optional[Dict[str, Any]] = None) -
 
     selected: List[str] = []
 
-    # 모터 제어 모듈: 홀센서(핀맵/명시) 또는 BLDC면 6-step, 그 외 dc_motor_pid(PID 캐스케이드)
-    if control in ("BLDC_6STEP", "BLDC") or (is_hall and control in ("", "BLDC", "BLDC_6STEP", "PMSM")):
+    # 모터 제어 모듈 선택
+    if is_hall and control in ("", "BLDC", "BLDC_6STEP"):
+        selected.append("bldc_6step_hall")            # 홀센서 → 6-step
+    elif control in ("BLDC_6STEP", "BLDC"):
         selected.append("bldc_6step_hall" if is_hall else "dc_motor_pid")
+    elif control in ("FOC", "PMSM"):
+        selected.append("foc_pmsm")                   # FOC/PMSM → 벡터제어
     else:
-        selected.append("dc_motor_pid")
+        selected.append("dc_motor_pid")               # DC/미지정 → PID
 
     # 통신 모듈 — comms 명시 또는 핀맵에 FDCAN 존재
     if "fdcan" in comms or roles.get("fdcan"):
@@ -93,6 +97,12 @@ def module_selection_report(vp: Dict[str, Any], roles: Dict[str, Any],
     rationale: List[str] = []
     warnings: List[str] = []
 
+    if "foc_pmsm" in selected:
+        rationale.append("FOC/PMSM → foc_pmsm (Clarke/Park/SVPWM + 전류·속도 PI)")
+        warnings.append(
+            "foc_pmsm은 레퍼런스 구현입니다 — PI 게인, 전류 측정 스케일/극성, 엔코더 정렬(전기각 오프셋)을 "
+            "실제 하드웨어에 맞게 보정·검증하세요."
+        )
     if "bldc_6step_hall" in selected:
         rationale.append("홀센서/BLDC 감지 → bldc_6step_hall (6-step 사다리꼴 구동)")
     if "dc_motor_pid" in selected:
@@ -102,13 +112,7 @@ def module_selection_report(vp: Dict[str, Any], roles: Dict[str, Any],
     if "multi_axis_sync" in selected:
         rationale.append(f"모터 {roles.get('motor_count')}개 → multi_axis_sync (다축 동기화)")
 
-    # 한계: FOC/PMSM 전용 golden 모듈 부재
-    if control in ("FOC", "PMSM") and "bldc_6step_hall" not in selected:
-        warnings.append(
-            "FOC/PMSM 요청이나 전용 golden 모듈이 없어 dc_motor_pid(PID 루프) 기반으로 생성됩니다. "
-            "Clarke/Park/SVPWM 등 정밀 FOC는 glue/LLM 적응 + 수동 보강이 필요합니다."
-        )
-    if not control and "bldc_6step_hall" not in selected:
+    if not control and not any(m in selected for m in ("bldc_6step_hall", "foc_pmsm")):
         warnings.append(
             "제어방식 미지정 → 기본 dc_motor_pid. 정확한 모듈 선택을 위해 prompt에 "
             "모터 종류·제어방식(FOC/6-step/DC)을 명시하세요."

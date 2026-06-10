@@ -96,11 +96,14 @@ MotorDriveForge/
 │   └── main.py                     # FastAPI: /v1/review, /v1/extract-pinmap,
 │                                   #   /v1/generate-ioc(⭐_build_ioc_content), /v1/pin-options,
 │                                   #   /v1/label-hints, /v1/generate-code, /v1/generate-step3
-├── golden_modules/                 # ⭐ Step 3 RAG 소스 (검증된 C/H)
-│   ├── dc_motor_pid.{c,h}
+├── golden_modules/                 # ⭐ Step 3 적응 소스 (검증된 C/H, 핸들 구조체 주입)
+│   ├── foc_pmsm.{c,h}              # 🆕 PMSM/BLDC FOC (Clarke/Park/SVPWM + 전류·속도 PI)
+│   ├── dc_motor_pid.{c,h}          # DC 브러시드 PID + H-bridge
 │   ├── multi_axis_sync.{c,h}
 │   ├── bldc_6step_hall.{c,h}
 │   └── fdcan_motor_cmd.{c,h}
+│   # select_modules(agent/step3): FOC/PMSM→foc_pmsm, 홀/BLDC→bldc_6step_hall,
+│   # DC/미지정→dc_motor_pid, FDCAN→+fdcan_motor_cmd, 다축→+multi_axis_sync
 ├── scripts/                        # 오프라인 데이터 인제스천
 │   ├── parse_pdfs.py / chunk_docs.py / embed_and_index.py / build_bm25.py
 │   ├── parse_cubemx_db.py          # 🆕 CubeMX db/mcu/*.xml → agent/pin_options/ (핀 AF·풀네임)
