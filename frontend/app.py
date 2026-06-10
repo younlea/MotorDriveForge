@@ -2148,8 +2148,38 @@ with tab3:
                         st.code(mod_code.get("c", ""), language="c")
 
             # 모듈 + glue 스니펫만 ZIP (주입 안 된 경우 수동 통합용)
+            _mk_target = {
+                "Includes": "/* USER CODE BEGIN Includes */  (모듈 헤더 #include)",
+                "PV": "/* USER CODE BEGIN PV */  (전역 구조체 인스턴스 선언)",
+                "2": "/* USER CODE BEGIN 2 */  (초기화: 구조체 채움 + PWM/ENC Start)",
+                "3": "/* USER CODE BEGIN 3 */  (while(1) 루프 안: 제어 API 호출)",
+            }
+            _readme = (
+                "Step 3 수동 통합 가이드\n"
+                "=======================\n\n"
+                "이 ZIP은 자동 머지(통합 프로젝트 ZIP) 대신 직접 합치고 싶을 때 쓰는 조각 모음입니다.\n\n"
+                "1) golden 모듈 복사\n"
+                "   modules/*.c  ->  프로젝트의 Core/Src/  (Src/ 레이아웃이면 Src/)\n"
+                "   modules/*.h  ->  프로젝트의 Core/Inc/  (Inc/ 레이아웃이면 Inc/)\n"
+                "   그리고 .c를 빌드에 추가:\n"
+                "     - Makefile: C_SOURCES += Core/Src/<name>.c\n"
+                "     - STM32CubeIDE: Src/에 넣으면 보통 자동 인식\n\n"
+                "2) glue 스니펫을 main.c의 USER CODE 마커 사이에 붙여넣기\n"
+            )
+            for _mk in ["Includes", "PV", "2", "3"]:
+                if _glue.get(_mk):
+                    _readme += f"   glue/USER_CODE_{_mk}.c   ->   {_mk_target[_mk]}\n"
+            _readme += (
+                "\n3) 전제 조건\n"
+                "   TIM/ADC 등 주변장치는 CubeMX 프로젝트에 이미 설정돼 있어야 합니다\n"
+                "   (htimN/hadcN 핸들, tim.c/adc.c 존재). 없으면 빌드되지 않습니다.\n\n"
+                f"포함 모듈: {', '.join(_mods.keys())}\n\n"
+                "주의: glue는 핀맵 기반 초안입니다. 빌드 후 핸들/채널/제어로직을 반드시 검토하세요.\n"
+                "참고한 opensource 알고리즘은 라이선스상 포함하지 않습니다(결과 화면의 출처 목록 참조).\n"
+            )
             _zbuf = _io.BytesIO()
             with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
+                _z.writestr("README.txt", _readme)
                 for _mn, _mc in _mods.items():
                     _z.writestr(f"modules/{_mn}.h", _mc.get("h", ""))
                     _z.writestr(f"modules/{_mn}.c", _mc.get("c", ""))

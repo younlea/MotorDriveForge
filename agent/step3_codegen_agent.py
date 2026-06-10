@@ -109,17 +109,41 @@ def _peripheral_handle(periph: str) -> str:
     return "h" + m.group(1).lower() + m.group(2)
 
 
+# 아날로그(ADC) 입력을 라벨로 분류 — 전류센싱/포텐셜미터/전압센스/온도. glue가 의미를 알도록.
+_ANALOG_ROLE_KW = {
+    "current": ("CURR", "CURRENT", "SHUNT", "ISENS", "I_SENS", "ISNS",
+                "IPHASE", "PHASE_CUR", "_CS", "CS_", "IU", "IV", "IW"),
+    "pot":     ("POT", "POTENTIO", "THROTTLE", "SPEED_REF", "SPDREF", "KNOB",
+                "ANALOG_IN", "AIN"),
+    "vsense":  ("VSEN", "VBUS", "VBAT", "VM", "VDC", "VOLT", "VIN", "BEMF"),
+    "temp":    ("TEMP", "NTC", "THERM"),
+}
+
+
+def _classify_analog(label: str) -> str:
+    """ADC 핀 라벨 → 역할(current/pot/vsense/temp/other)."""
+    u = re.sub(r"[^A-Z0-9]", "_", (label or "").upper())
+    for role, kws in _ANALOG_ROLE_KW.items():
+        if any(k in u for k in kws):
+            return role
+    return "other"
+
+
 def map_roles(vp: Dict[str, Any]) -> Dict[str, Any]:
     """validated_pins → 모터 제어 역할 매핑 (결정론).
 
     반환 roles:
-      pwm_timer, pwm_channels{CHx:pin}, enc_timer, enc_channels,
-      current_sense[{kind,periph,pin,label}], brk{pin,function},
-      fdcan, dir_gpios[{pin,label,gpio,gpio_pin}], comms[]
+      pwm_timer, pwm_channels{CHx:pin}, enc_timer, current_sense[...],
+      analog_inputs{current/pot/vsense/temp/other}, hall[...], feedback[...],
+      adc_peripherals[...], brk, fdcan, dir_gpios[...], comms[]
     """
     pins: List[Dict[str, Any]] = vp.get("pins", [])
     tim_channels: Dict[str, List[Tuple[str, str]]] = {}   # TIMx → [(CHsig, pin)]
-    current: List[Dict[str, str]] = []
+    analog: Dict[str, List[Dict[str, str]]] = {
+        "current": [], "pot": [], "vsense": [], "temp": [], "other": []}
+    hall: List[Dict[str, str]] = []
+    adc_periphs: set = set()
+    enc_tim_hint: set = set()   # 라벨에 ENC가 있는 TIM(엔코더 우선 판정용)
     brk: Optional[Dict[str, str]] = None
     fdcan: Optional[str] = None
     dir_gpios: List[Dict[str, str]] = []
@@ -128,6 +152,9 @@ def map_roles(vp: Dict[str, Any]) -> Dict[str, Any]:
         func = (p.get("function") or "").strip().upper()
         pin  = (p.get("pin") or "").strip().upper()
         lbl  = (p.get("label") or "").strip()
+        is_hall = "HALL" in lbl.upper()
+        if is_hall:
+            hall.append({"pin": pin, "label": lbl, "function": func})
 
         if func.startswith("TIM"):
             periph = func.split("_")[0]
@@ -136,38 +163,71 @@ def map_roles(vp: Dict[str, Any]) -> Dict[str, Any]:
                 brk = {"pin": pin, "function": func}
             elif sub.startswith("CH"):
                 tim_channels.setdefault(periph, []).append((sub, pin))
+                if "ENC" in lbl.upper():
+                    enc_tim_hint.add(periph)
         elif "OPAMP" in func and "VOUT" in func:
-            current.append({"kind": "opamp", "periph": func.split("_")[0], "pin": pin, "label": lbl})
+            periph = func.split("_")[0]
+            analog["current"].append({"kind": "opamp", "periph": periph, "pin": pin, "label": lbl})
+            adc_periphs.add(periph)
         elif re.match(r"^ADC\d?_IN", func):
-            current.append({"kind": "adc", "periph": func.split("_")[0], "pin": pin, "label": lbl})
+            periph = func.split("_")[0]
+            analog[_classify_analog(lbl)].append(
+                {"kind": "adc", "periph": periph, "pin": pin, "label": lbl})
+            adc_periphs.add(periph)
         elif func.startswith("FDCAN"):
             fdcan = func.split("_")[0]
-        elif func in ("", "GPIO", "NAN", "NONE"):
+        elif func in ("", "GPIO", "NAN", "NONE") and not is_hall:
             # function 없는 라벨핀 → 방향/Enable/SD 등 GPIO 제어선 후보
             gp = _pin_to_gpio(pin)
             if gp and lbl:
                 dir_gpios.append({"pin": pin, "label": lbl, "gpio": gp[0], "gpio_pin": gp[1]})
 
-    # PWM 타이머: TIM1/TIM8 중 채널이 가장 많은 것 우선, 없으면 채널 최다 TIM
+    current = analog["current"]   # 하위 호환 (current_sense)
+
     def _ch_count(t: str) -> int:
         return len(tim_channels.get(t, []))
-    pwm_candidates = [t for t in ("TIM1", "TIM8") if t in tim_channels]
-    if pwm_candidates:
-        pwm_timer = max(pwm_candidates, key=_ch_count)
-    elif tim_channels:
-        pwm_timer = max(tim_channels, key=_ch_count)
-    else:
-        pwm_timer = None
 
-    # 엔코더 타이머: PWM 타이머가 아닌 TIM 중 CH1/CH2를 가진 것
+    # 엔코더 타이머 먼저 결정 — 라벨에 ENC가 있고 CH1·CH2 보유한 TIM 우선(없으면 None).
     enc_timer = None
-    for t, chs in tim_channels.items():
-        if t == pwm_timer:
-            continue
-        sigs = {c for c, _ in chs}
+    for t in sorted(enc_tim_hint):
+        sigs = {c for c, _ in tim_channels.get(t, [])}
         if "CH1" in sigs and "CH2" in sigs:
             enc_timer = t
             break
+
+    # PWM 타이머: 엔코더로 쓰는 TIM은 제외. TIM1/TIM8(고급) 우선, 없으면 채널 최다 TIM.
+    pwm_pool = [t for t in tim_channels if t != enc_timer]
+    pwm_adv = [t for t in ("TIM1", "TIM8") if t in pwm_pool]
+    if pwm_adv:
+        pwm_timer = max(pwm_adv, key=_ch_count)
+    elif pwm_pool:
+        pwm_timer = max(pwm_pool, key=_ch_count)
+    else:
+        pwm_timer = None
+
+    # 엔코더 힌트가 없었다면(라벨 미표기) PWM 아닌 CH1/CH2 TIM을 엔코더로 추정(기존 동작)
+    if enc_timer is None:
+        for t, chs in tim_channels.items():
+            if t == pwm_timer:
+                continue
+            sigs = {c for c, _ in chs}
+            if "CH1" in sigs and "CH2" in sigs:
+                enc_timer = t
+                break
+
+    # 피드백/입력 센서 종류 요약 (핀맵 라벨 + 명시 encoder_type에서 결정론 추론)
+    enc_type = (vp.get("encoder_type", "") or "").lower()
+    feedback: List[str] = []
+    if enc_timer or enc_type in ("incremental", "abz", "quadrature"):
+        feedback.append("incremental_encoder")
+    if hall or enc_type == "hall":
+        feedback.append("hall")
+    if analog["pot"]:
+        feedback.append("potentiometer")
+    if enc_type == "sensorless" or analog["vsense"]:
+        feedback.append("sensorless/bemf" if enc_type == "sensorless" else "voltage_sense")
+    if not feedback:
+        feedback.append("unspecified")
 
     return {
         "pwm_timer": pwm_timer,
@@ -177,6 +237,10 @@ def map_roles(vp: Dict[str, Any]) -> Dict[str, Any]:
         "enc_handle": _peripheral_handle(enc_timer) if enc_timer else None,
         "current_sense": current,
         "current_handles": sorted({_peripheral_handle(c["periph"]) for c in current}),
+        "analog_inputs": analog,
+        "hall": hall,
+        "feedback": feedback,
+        "adc_peripherals": sorted(adc_periphs),
         "brk": brk,
         "fdcan": fdcan,
         "fdcan_handle": _peripheral_handle(fdcan) if fdcan else None,
@@ -208,8 +272,8 @@ def check_required_peripherals(
         required[roles["enc_timer"]] = "엔코더 타이머"
     if roles.get("fdcan"):
         required[roles["fdcan"]] = "FDCAN"
-    for c in roles.get("current_sense", []):
-        required[c["periph"]] = "전류 센싱"
+    for periph in roles.get("adc_peripherals", []):
+        required[periph] = "아날로그(전류/포텐셜미터/전압/온도)"
     have = set(project_handles or {})
     missing = [(p, role) for p, role in required.items() if p not in have]
     msgs: List[str] = []
@@ -379,7 +443,13 @@ def _roles_summary(vp: Dict[str, Any], roles: Dict[str, Any], binding: Dict[str,
         f"제어방식: {roles.get('control_type') or '(미지정)'}, 엔코더: {roles.get('encoder_type') or '(미지정)'}, 모터 수: {roles.get('motor_count', 1)}",
         f"PWM 타이머: {roles.get('pwm_timer')} (핸들 {roles.get('pwm_handle')}), 채널: {roles.get('pwm_channels')}",
         f"엔코더 타이머: {roles.get('enc_timer')} (핸들 {roles.get('enc_handle')})",
+        f"피드백/입력 센서: {', '.join(roles.get('feedback', [])) or '(미지정)'}",
         f"전류 센싱: {[ (c['periph'], c['pin'], c['label']) for c in roles.get('current_sense', []) ]}",
+        f"포텐셜미터/아날로그 지령: {[ (c['pin'], c['label']) for c in roles.get('analog_inputs', {}).get('pot', []) ]}",
+        f"전압 센스: {[ (c['pin'], c['label']) for c in roles.get('analog_inputs', {}).get('vsense', []) ]}",
+        f"온도 센서: {[ (c['pin'], c['label']) for c in roles.get('analog_inputs', {}).get('temp', []) ]}",
+        f"기타 아날로그: {[ (c['pin'], c['label']) for c in roles.get('analog_inputs', {}).get('other', []) ]}",
+        f"홀 센서: {[ (h['pin'], h['label']) for h in roles.get('hall', []) ]}",
         f"BRK: {roles.get('brk')}",
         f"FDCAN: {roles.get('fdcan')} (핸들 {roles.get('fdcan_handle')})",
         f"방향/제어 GPIO: {[ (g['label'], g['pin']) for g in roles.get('dir_gpios', []) ]}",
