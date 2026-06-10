@@ -54,6 +54,9 @@ services:
       - ioc_outputs:/tmp/ioc_outputs
       - review_results:/app/review_results
       - ./agent:/app/agent:ro
+      # backend 소스도 마운트 — git pull 후 컨테이너 재시작만으로 반영(재빌드 불필요).
+      # (이미지에 구워진 코드만 쓰면 restart로는 backend/main.py 변경이 반영되지 않음)
+      - ./backend:/app/backend:ro
       # 오프라인 인제스천(RAG 인덱스 빌드)용 — 호스트에 python 없이 컨테이너에서 실행.
       # scripts는 읽기전용, dataset은 chunks_code 생성 위해 쓰기 가능.
       - ./scripts:/app/scripts:ro
