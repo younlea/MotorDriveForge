@@ -2071,6 +2071,16 @@ with tab3:
             st.success(f"완료 — 모듈 {len(_mods)}개 + glue {len(_glue)}블록 생성 "
                        f"(프로젝트: {_src_msg})")
 
+            # 모듈 선택 근거 + 한계 경고 (조합 → golden 매핑)
+            _mrat = _res.get("module_rationale", [])
+            _mwarn = _res.get("module_warnings", [])
+            if _mrat:
+                with st.expander(f"선택된 모듈: {', '.join(_sel)} — 선택 근거", expanded=bool(_mwarn)):
+                    for _r in _mrat:
+                        st.markdown(f"- {_r}")
+            for _w in _mwarn:
+                st.warning(_w)
+
             # 주변장치 사전 점검 경고 — 업로드 프로젝트에 TIM/ADC/OPAMP 등이 없으면 빌드 실패
             _pwarn = _res.get("peripheral_warnings", [])
             if _pwarn:

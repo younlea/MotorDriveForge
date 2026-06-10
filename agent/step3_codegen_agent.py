@@ -52,31 +52,70 @@ except ImportError:
 # 결정론적 모듈 선택 규칙
 # ---------------------------------------------------------------------------
 
-def select_modules(vp: Dict[str, Any]) -> List[str]:
-    """validated_pins → 적용할 golden module 이름 목록 (LLM 없음)."""
-    control = vp.get("control_type", "").upper()
-    encoder = vp.get("encoder_type", "")
+def select_modules(vp: Dict[str, Any], roles: Optional[Dict[str, Any]] = None) -> List[str]:
+    """validated_pins(+roles) → 적용할 golden module 이름 목록 (LLM 없음).
+
+    roles를 주면 핀맵 기반(홀센서·FDCAN 핀 등)으로 더 정확히 고른다. 없으면 vp만으로.
+    """
+    roles = roles if roles is not None else map_roles(vp)
+    control = (vp.get("control_type") or "").upper()
     comms   = [c.lower() for c in vp.get("comms", [])]
-    n_motor = vp.get("motor_count", 1)
+    n_motor = int(vp.get("motor_count", 1) or 1)
+    is_hall = bool(roles.get("hall")) or (vp.get("encoder_type") or "").lower() == "hall"
 
     selected: List[str] = []
 
-    # 모터 제어 기반 모듈
-    if control in ("BLDC_6STEP", "BLDC") and encoder == "hall":
-        selected.append("bldc_6step_hall")
+    # 모터 제어 모듈: 홀센서(핀맵/명시) 또는 BLDC면 6-step, 그 외 dc_motor_pid(PID 캐스케이드)
+    if control in ("BLDC_6STEP", "BLDC") or (is_hall and control in ("", "BLDC", "BLDC_6STEP", "PMSM")):
+        selected.append("bldc_6step_hall" if is_hall else "dc_motor_pid")
     else:
-        # FOC / PMSM / DC 등 모두 dc_motor_pid 기반
         selected.append("dc_motor_pid")
 
-    # 통신 모듈
-    if "fdcan" in comms:
+    # 통신 모듈 — comms 명시 또는 핀맵에 FDCAN 존재
+    if "fdcan" in comms or roles.get("fdcan"):
         selected.append("fdcan_motor_cmd")
 
     # 다축 동기화
     if n_motor > 1:
         selected.append("multi_axis_sync")
 
-    return selected
+    return list(dict.fromkeys(selected))   # 중복 제거(순서 유지)
+
+
+def module_selection_report(vp: Dict[str, Any], roles: Dict[str, Any],
+                            selected: List[str]) -> Tuple[List[str], List[str]]:
+    """선택 근거(rationale)와 한계 경고(warnings)를 만든다 — 결과 화면에 노출용.
+
+    현재 golden 라이브러리는 4종(dc_motor_pid/bldc_6step_hall/fdcan_motor_cmd/multi_axis_sync)
+    뿐이라 조합 매핑이 거칠다. 특히 FOC/PMSM 전용 모듈이 없어 정밀 제어는 LLM 적응에 의존.
+    """
+    control = (vp.get("control_type") or "").upper()
+    rationale: List[str] = []
+    warnings: List[str] = []
+
+    if "bldc_6step_hall" in selected:
+        rationale.append("홀센서/BLDC 감지 → bldc_6step_hall (6-step 사다리꼴 구동)")
+    if "dc_motor_pid" in selected:
+        rationale.append("dc_motor_pid (PID 캐스케이드 루프) 기반")
+    if "fdcan_motor_cmd" in selected:
+        rationale.append("FDCAN 감지 → fdcan_motor_cmd (명령 파싱)")
+    if "multi_axis_sync" in selected:
+        rationale.append(f"모터 {roles.get('motor_count')}개 → multi_axis_sync (다축 동기화)")
+
+    # 한계: FOC/PMSM 전용 golden 모듈 부재
+    if control in ("FOC", "PMSM") and "bldc_6step_hall" not in selected:
+        warnings.append(
+            "FOC/PMSM 요청이나 전용 golden 모듈이 없어 dc_motor_pid(PID 루프) 기반으로 생성됩니다. "
+            "Clarke/Park/SVPWM 등 정밀 FOC는 glue/LLM 적응 + 수동 보강이 필요합니다."
+        )
+    if not control and "bldc_6step_hall" not in selected:
+        warnings.append(
+            "제어방식 미지정 → 기본 dc_motor_pid. 정확한 모듈 선택을 위해 prompt에 "
+            "모터 종류·제어방식(FOC/6-step/DC)을 명시하세요."
+        )
+    if roles.get("analog_inputs", {}).get("pot"):
+        rationale.append("포텐셜미터 입력 감지 → 속도/위치 지령으로 glue에서 ADC 읽기 반영")
+    return rationale, warnings
 
 
 def _read_module(name: str) -> Dict[str, str]:
@@ -736,7 +775,8 @@ class Step3Agent:
         # 1) 역할 매핑 (결정론)
         _cb(5, "역할 매핑(결정론) 중...")
         roles = map_roles(vp)
-        selected = select_modules(vp)
+        selected = select_modules(vp, roles)
+        module_rationale, module_warnings = module_selection_report(vp, roles, selected)
         _cb(12, f"모듈 선택: {', '.join(selected)}")
 
         # 2) 바인딩: 프로젝트 우선, 없으면 결정론 유도
@@ -796,6 +836,8 @@ class Step3Agent:
 
         return {
             "selected": selected,
+            "module_rationale": module_rationale,
+            "module_warnings": module_warnings,
             "roles": roles,
             "binding": binding,
             "glue": glue,
