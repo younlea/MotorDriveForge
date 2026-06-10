@@ -1155,6 +1155,12 @@ def _synth_adc(props, inst, items):
                   for m in [re.search(r"IN(\d+)", sig)] if m})
     if not chs:
         return
+    # ★ 각 ADC 핀에 입력 모드(.Mode=IN{n}-Single-Ended) 부여 — 이게 없으면 CubeMX가
+    #   채널 핀을 활성(녹색)으로 인식하지 않아 ADC가 설정되지 않는다(Signal만으론 부족).
+    for pin, sig, _ in items:
+        m = re.search(r"IN(\d+)", sig.upper())
+        if m:
+            props[f"{pin}.Mode"] = f"IN{m.group(1)}-Single-Ended"
     multi = len(chs) > 1
     base = {
         "Mode": "ADC_MODE_INDEPENDENT",
