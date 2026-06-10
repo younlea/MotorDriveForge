@@ -2082,6 +2082,11 @@ with tab3:
             for _w in _mwarn:
                 st.warning(_w)
 
+            # 이식성 경고 — HAL 드라이버가 링크(참조)라 다른 위치에서 빌드 시 깨짐
+            _port = _res.get("portability_warning")
+            if _port:
+                st.warning("🔗 " + _port)
+
             # 주변장치 사전 점검 경고 — 업로드 프로젝트에 TIM/ADC/OPAMP 등이 없으면 빌드 실패
             _pwarn = _res.get("peripheral_warnings", [])
             if _pwarn:

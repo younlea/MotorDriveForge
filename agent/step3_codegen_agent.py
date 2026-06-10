@@ -468,6 +468,34 @@ def _project_layout(project_dir: Path) -> Tuple[Path, Path]:
     return project_dir, project_dir
 
 
+def detect_linked_libraries(project_dir: Path) -> Optional[str]:
+    """CubeIDE 프로젝트가 HAL 드라이버를 '참조(링크)' 방식으로 포함하는지 감지.
+
+    Drivers 소스가 프로젝트에 복사돼 있지 않고 .project가 외부 상대경로 링크만 가지면,
+    다른 위치로 옮겼을 때 빌드가 깨진다(No rule to make target stm32g4xx_hal.c).
+    감지되면 사용자 안내 메시지 반환, 아니면 None.
+    """
+    proj = next(iter(project_dir.rglob(".project")), None)
+    if not proj:
+        return None
+    try:
+        txt = proj.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    linked = "<link>" in txt and ("PROJECT_LOC" in txt or "PARENT-" in txt)
+    drv_srcs = list(project_dir.rglob("Drivers/**/*.c"))
+    if linked and len(drv_srcs) < 3:
+        return (
+            "이 CubeIDE 프로젝트는 HAL 드라이버를 '참조(링크)' 방식으로 포함합니다 "
+            "(Drivers 소스가 프로젝트에 복사돼 있지 않음). 프로젝트를 다른 위치에서 빌드하면 "
+            "HAL 소스를 못 찾아 'No rule to make target .../stm32g4xx_hal.c' 에러가 납니다. "
+            "해결: CubeMX → Project Manager → Code Generator → "
+            "'Copy all used libraries into the project folder'를 선택해 재생성하면 자체 포함되어 "
+            "어디서나 빌드됩니다. (또는 프로젝트를 생성 당시 위치 그대로 두고 빌드)"
+        )
+    return None
+
+
 def load_project_from_zip(zip_bytes: bytes, dest_dir: Path) -> Path:
     """업로드 ZIP을 dest_dir에 풀고 프로젝트 루트 경로 반환(구조 보존)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -826,9 +854,11 @@ class Step3Agent:
 
         # 5) 통합 (프로젝트가 있을 때만 주입)
         integration = None
+        portability_warning = None
         if project_dir is not None:
             _cb(88, "모듈 복사 + 빌드등록 + main.c 주입 중...")
             integration = self.integrate(project_dir, selected, glue)
+            portability_warning = detect_linked_libraries(project_dir)
 
         _cb(95, "정리 완료")
 
@@ -856,6 +886,7 @@ class Step3Agent:
             "pinmap_summary": roles_summary,
             "peripheral_missing": periph_missing,
             "peripheral_warnings": periph_warnings,
+            "portability_warning": portability_warning,
             # 빌드 가능 추정: 프로젝트가 있고 필요한 주변장치가 모두 존재할 때만.
             "buildable": (project_dir is not None and not periph_missing),
         }
