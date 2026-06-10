@@ -1089,10 +1089,23 @@ def _esc_val(v: str) -> str:
 
 
 def _synth_tim(props, inst, items, vp):
-    """TIM 자동 설정 — 라벨에 ENC면 엔코더, 아니면 PWM 출력. 채널은 배정 핀에서 추출."""
-    chans = sorted({int(m.group(1)) for _, sig, _ in items
-                    for m in [re.search(r"CH(\d+)", sig)] if m})
-    is_enc = any("ENC" in (lb or "").upper() for _, _, lb in items) and {1, 2} <= set(chans)
+    """TIM 자동 설정 — 라벨에 ENC면 엔코더, 아니면 PWM 출력. 채널은 배정 핀에서 추출.
+
+    ★ 핵심: CubeMX가 채널 함수를 인식하려면 핀의 Signal Handler 값에 '모드 접미사'가
+       반드시 있어야 한다(예: SH.S_TIM3_CH1.0=TIM3_CH1,PWM Generation1 CH1). 없으면
+       CubeMX가 타이머를 활성 IP로 보지 않아 tim.c/htim을 생성하지 않는다.
+    """
+    # 메인 채널(CHn)과 상보 채널(CHnN)을 분리
+    main_chans = sorted({int(m.group(1)) for _, sig, _ in items
+                         for m in [re.match(r"TIM\d+_CH(\d+)$", sig.upper())] if m})
+    n_chans = {int(m.group(1)) for _, sig, _ in items
+               for m in [re.match(r"TIM\d+_CH(\d+)N$", sig.upper())] if m}
+    is_enc = any("ENC" in (lb or "").upper() for _, _, lb in items) and {1, 2} <= set(main_chans)
+
+    def _set_sh(func: str, suffix: str):
+        props[f"SH.S_{func}.0"] = f"{func},{suffix}"
+        props[f"SH.S_{func}.ConfNb"] = "1"
+
     if is_enc:
         props[f"{inst}.EncoderMode"] = "TIM_ENCODERMODE_TI12"
         props[f"{inst}.CounterMode"] = "TIM_COUNTERMODE_UP"
@@ -1108,40 +1121,72 @@ def _synth_tim(props, inst, items, vp):
             "IC1Polarity,IC1Selection,IC1Prescaler,IC1Filter,"
             "IC2Polarity,IC2Selection,IC2Prescaler,IC2Filter"
         )
+        for c in (1, 2):
+            _set_sh(f"{inst}_CH{c}", "Encoder_Interface")
     else:
-        ch_keys = [f"Channel-PWM Generation{c} CH{c}" for c in chans]
-        for c in chans:
+        ch_keys = [f"Channel-PWM Generation{c} CH{c}" for c in main_chans]
+        for c in main_chans:
             props[f"{inst}.Channel-PWM Generation{c} CH{c}"] = f"TIM_CHANNEL_{c}"
+            # SH 모드 접미사 — 상보채널(CHnN)이 있으면 ' CHnN'까지 붙인다
+            suffix = f"PWM Generation{c} CH{c}"
+            if c in n_chans:
+                suffix += f" CH{c}N"
+            _set_sh(f"{inst}_CH{c}", suffix)
         props[f"{inst}.CounterMode"] = "TIM_COUNTERMODE_UP"
         props[f"{inst}.Period"] = "65535"
         props[f"{inst}.Prescaler"] = "0"
         props[f"{inst}.AutoReloadPreload"] = "TIM_AUTORELOAD_PRELOAD_DISABLE"
         ipp = ["Prescaler", "CounterMode", "Period", "AutoReloadPreload"] + ch_keys
-        # 고급 타이머(TIM1/TIM8)는 상보+데드타임
-        if inst in ("TIM1", "TIM8") and any("CHN" in sig.upper() or sig.upper().endswith("N")
-                                            for _, sig, _ in items):
+        # 고급 타이머(TIM1/TIM8)는 상보출력 → RepetitionCounter
+        if inst in ("TIM1", "TIM8") and n_chans:
             props[f"{inst}.RepetitionCounter"] = "0"
             ipp.append("RepetitionCounter")
         props[f"{inst}.IPParameters"] = ",".join(ipp)
 
 
 def _synth_adc(props, inst, items):
-    """ADC 자동 설정 — 배정된 IN 채널들을 정규 변환 랭크로 등록."""
+    """ADC 자동 설정 — 배정된 IN 채널들을 정규 변환 랭크로 등록.
+
+    CubeMX가 ADC를 활성 IP로 받아들이려면 핵심 파라미터(Resolution/ClockPrescaler/
+    ScanConvMode/EnableRegularConversion 등)와 채널별 OffsetNumber가 필요하다 — 실제
+    CubeMX 출력(STM32CubeG4 예제)에 맞춰 채운다.
+    """
     chs = sorted({int(m.group(1)) for _, sig, _ in items
                   for m in [re.search(r"IN(\d+)", sig)] if m})
     if not chs:
         return
-    props[f"{inst}.Mode"] = "ADC_MODE_INDEPENDENT"
-    props[f"{inst}.NbrOfConversion"] = str(len(chs))
-    props[f"{inst}.master"] = "1"
-    ipp = ["Mode", "NbrOfConversion", "master"]
+    multi = len(chs) > 1
+    base = {
+        "Mode": "ADC_MODE_INDEPENDENT",
+        "ClockPrescaler": "ADC_CLOCK_SYNC_PCLK_DIV4",
+        "Resolution": "ADC_RESOLUTION_12B",
+        "DataAlign": "ADC_DATAALIGN_RIGHT",
+        "ScanConvMode": "ADC_SCAN_ENABLE" if multi else "ADC_SCAN_DISABLE",
+        "EOCSelection": "ADC_EOC_SINGLE_CONV",
+        "LowPowerAutoWait": "DISABLE",
+        "ContinuousConvMode": "DISABLE",
+        "DiscontinuousConvMode": "DISABLE",
+        "DMAContinuousRequests": "DISABLE",
+        "Overrun": "ADC_OVR_DATA_OVERWRITTEN",
+        "EnableRegularConversion": "ENABLE",
+        "OversamplingMode": "DISABLE",
+        "NbrOfConversion": str(len(chs)),
+        "ExternalTrigConv": "ADC_SOFTWARE_START",
+        "ExternalTrigConvEdge": "ADC_EXTERNALTRIGCONVEDGE_NONE",
+        "master": "1",
+    }
+    for k, v in base.items():
+        props[f"{inst}.{k}"] = v
+    ipp = list(base.keys())
     for i, ch in enumerate(chs):
         props[f"{inst}.Rank-{i}#ChannelRegularConversion"] = str(i + 1)
         props[f"{inst}.Channel-{i}#ChannelRegularConversion"] = f"ADC_CHANNEL_{ch}"
         props[f"{inst}.SamplingTime-{i}#ChannelRegularConversion"] = "ADC_SAMPLETIME_2CYCLES_5"
+        props[f"{inst}.OffsetNumber-{i}#ChannelRegularConversion"] = "ADC_OFFSET_NONE"
         ipp += [f"Rank-{i}#ChannelRegularConversion",
                 f"Channel-{i}#ChannelRegularConversion",
-                f"SamplingTime-{i}#ChannelRegularConversion"]
+                f"SamplingTime-{i}#ChannelRegularConversion",
+                f"OffsetNumber-{i}#ChannelRegularConversion"]
     props[f"{inst}.IPParameters"] = ",".join(ipp)
 
 
