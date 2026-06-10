@@ -136,13 +136,16 @@ MotorDriveForge/
 | 위치 | 모델 | 비고 |
 |---|---|---|
 | Step 1 LLM Debate | Gemma 4 31B Dense (Q4_K_M) | 추론·자연어 파싱 |
-| Step 3 Codegen | Gemma 4 26B MoE (Q8) | 1차 |
-| Step 3 Codegen A/B | Qwen3-Coder 30B A3B | HAL 정확도로 비교 후 채택 |
+| **Step 3 glue 생성** | **Gemma 4 31B Dense (채택)** | Step1과 동일 모델 1개만 상주(콜드로드·메모리 절약). glue는 제약된 적응 작업이라 충분. `_available_model()`이 gemma4 우선 |
+| Step 3 codegen (향후 선택) | Qwen3-Coder 30B A3B | glue 품질 이슈/golden 확장 시 A/B 벤치 후 검토 |
 | RAG dense | BAAI/bge-m3 | 다국어 |
 | RAG sparse | rank_bm25 | TIM1_CH1N 같은 정확 매칭 |
 | 페르소나 | (Gemma 4 31B + system prompt × 5) | 별도 가중치 없음 |
 
-co-residency: 31B + 26B = ~42 GB < 128 GB ✓
+**모델 단일화(2026-06-10)**: Step 3 재설계로 LLM은 알고리즘이 아닌 *바인딩 glue*만 생성(알고리즘은
+golden_modules, 핸들/채널은 결정론 매퍼가 제공). 부담이 줄어 Step1과 같은 **Gemma 4 31B 하나로 통일** —
+모델 하나만 GPU 상주(keep_alive:-1로 워밍, Step3 콜드로드 없음). Qwen3-Coder는 필요 시 옵션.
+co-residency: Gemma 4 31B(~20GB) 단일 < 128 GB ✓ (별도 코더모델 미상주)
 
 ---
 
@@ -215,7 +218,7 @@ python scripts/build_bm25.py
 3. **G4 errata 명시적 인제스천** — `dataset/official_docs/errata/` 분리
 4. **합성 망가진 스키매틱 파이프라인** (`scripts/mutate_evm.py`) — 12 mutation rules
 5. **5 페르소나 프롬프트 + 모더레이터** 구현 — 현재 단일 LLM 호출이면 분리
-6. **Qwen3-Coder vs Gemma 4 26B 벤치마크** (HAL 정확도)
+6. (보류) **Qwen3-Coder vs Gemma 4 벤치마크** — Step3 glue는 Gemma 4 31B로 채택. glue 품질 이슈/golden 확장 시에만 A/B
 7. **사내 리뷰 자동 아카이브** — 장기 해자
 
 자세한 내용은 `tasks/` 하위 작업 명세 참조.
