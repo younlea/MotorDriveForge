@@ -13,7 +13,7 @@ STM32G4 모터 드라이버 회로를 검토하고, 통과 시 CubeMX로 펌웨�
 
 - **하드웨어**: NVIDIA DGX Spark 128GB 통합 메모리, 외부망 차단
 - **타겟 칩**: STM32G431 / G471 / G474 / G491 / G4A1
-- **모델 서빙**: Ollama (로컬), Gemma 4 31B + 26B 동시 상주
+- **모델 서빙**: Ollama (로컬), Gemma 4 31B 단일 상주 (Step 1 + Step 3 공유)
 - **벡터 DB**: Qdrant (Docker)
 - **백엔드**: FastAPI, **프론트**: Streamlit (MVP) → React (추후)
 
@@ -90,14 +90,14 @@ MotorDriveForge/
 ├── agent/
 │   ├── step1_review_agent.py      # ⭐ Step 1 핵심: A→B→C 오케스트레이션 + Rule Engine
 │   ├── step3_codegen_agent.py     # Step 3 Golden Module 적응
-│   ├── pin_options/               # 🆕 칩별 핀 AF 옵션(CubeMX DB 파생, 22패밀리) — 드롭다운·검증·.ioc
-│   └── pin_io_structure.json      # 🆕 핀 FT/TT(5V내성) — 데이터시트 파생
+│   ├── pin_options/               # 칩별 핀 AF 옵션(CubeMX DB 파생, 22패밀리) — 드롭다운·검증·.ioc
+│   └── pin_io_structure.json      # 핀 FT/TT(5V내성) — 데이터시트 파생
 ├── backend/
 │   └── main.py                     # FastAPI: /v1/review, /v1/extract-pinmap,
 │                                   #   /v1/generate-ioc(⭐_build_ioc_content), /v1/pin-options,
 │                                   #   /v1/label-hints, /v1/generate-code, /v1/generate-step3
 ├── golden_modules/                 # ⭐ Step 3 적응 소스 (검증된 C/H, 핸들 구조체 주입)
-│   ├── foc_pmsm.{c,h}              # 🆕 PMSM/BLDC FOC (Clarke/Park/SVPWM + 전류·속도 PI)
+│   ├── foc_pmsm.{c,h}              # PMSM/BLDC FOC (Clarke/Park/SVPWM + 전류·속도 PI)
 │   ├── dc_motor_pid.{c,h}          # DC 브러시드 PID + H-bridge
 │   ├── multi_axis_sync.{c,h}
 │   ├── bldc_6step_hall.{c,h}
@@ -106,26 +106,34 @@ MotorDriveForge/
 │   # DC/미지정→dc_motor_pid, FDCAN→+fdcan_motor_cmd, 다축→+multi_axis_sync
 ├── scripts/                        # 오프라인 데이터 인제스천
 │   ├── parse_pdfs.py / chunk_docs.py / embed_and_index.py / build_bm25.py
-│   ├── parse_cubemx_db.py          # 🆕 CubeMX db/mcu/*.xml → agent/pin_options/ (핀 AF·풀네임)
-│   ├── parse_datasheet_io.py       # 🆕 ST 데이터시트 → agent/pin_io_structure.json (FT/TT)
-│   ├── parse_opensource_code.py     # opensource → 핀 정보 청크 (Step1 RAG, stm32g4_docs)
-│   ├── parse_opensource_algorithms.py # 🆕 opensource → 알고리즘 청크 (Step3 코드 RAG, stm32g4_code)
+│   ├── parse_cubemx_db.py          # CubeMX db/mcu/*.xml → agent/pin_options/ (핀 AF·풀네임)
+│   ├── parse_cubemx_xml.py         # CubeMX XML → 핀 AF DB JSON (폴백 테이블 포함)
+│   ├── parse_datasheet_io.py       # ST 데이터시트 → agent/pin_io_structure.json (FT/TT)
+│   ├── parse_opensource_code.py    # opensource → 핀 정보 청크 (Step1 RAG, stm32g4_docs)
+│   ├── parse_opensource_algorithms.py # opensource → 알고리즘 청크 (Step3 코드 RAG, stm32g4_code)
 │   ├── scrape_st_forum.py
-│   └── scrape_ti_e2e.py            # 🆕 TODO
+│   └── scrape_ti_e2e.py            # TODO: TI E2E 포럼 크롤러 (미작성)
 │   # ※ dataset/STM32CubeMX/ (raw CubeMX DB ~600MB)는 .gitignore — 파생 JSON만 커밋
 ├── dataset/
 │   ├── official_docs/              # ST PDFs (✅ 14건)
-│   ├── official_docs/errata/       # 🆕 G4 errata 명시적 분리
-│   ├── forum_qa/                   # ST + TI E2E
-│   ├── opensource/                 # submodules
+│   ├── official_docs/errata/       # TODO: G4 errata 명시적 분리 (미생성)
+│   ├── forum_qa/                   # ST + TI E2E (st_forum_qa.jsonl 수집 필요)
+│   ├── opensource/                 # submodules (6개)
 │   ├── chunks/                     # Step1 RAG 청크 → stm32g4_docs
-│   ├── chunks_code/               # 🆕 Step3 코드 RAG 청크 → stm32g4_code (Step1과 분리)
-│   └── synthetic/                  # 🆕 합성 망가진 스키매틱
+│   ├── chunks_code/                # TODO: Step3 코드 RAG 청크 → stm32g4_code (미생성, parse_opensource_algorithms.py 실행 후 생성)
+│   ├── parsed_text/                # PDF 파싱 중간 결과물
+│   ├── pin_af_db.json              # 핀 AF DB 폴백 (git에 포함)
+│   ├── multi_motor/                # 멀티모터 설계 가이드
+│   └── synthetic/                  # TODO: 합성 망가진 스키매틱 (미생성, mutate_evm.py 작성 필요)
+├── tests/
+│   └── test_review_modes.py        # 단위 테스트 (pytest)
+├── doc/                            # 발표 자료 (PPT/HTML/MP4/PNG)
 ├── work/                           # 워크플로우 기획 문서
 │   ├── step1_workflow/
 │   └── step2_workflow/
 ├── ARCHITECTURE.md                 # ⭐ 시스템 다이어그램·모델·데이터
 ├── CLAUDE.md                       # 이 파일
+├── SPARK_STARTUP.md                # DGX Spark 기동 절차 가이드
 └── todo.md                         # 작업 현황
 ```
 

@@ -50,9 +50,9 @@ flowchart TD
     %% ============ STEP 3 ============
     subgraph S3["STEP 3 · Algorithm Integration Agent"]
         direction TB
-        S3LLM["💡 Codegen LLM<br/>━━━━━━━━━━━━━<br/>1차: Gemma 4 26B MoE (Q8, active~4B)<br/>A/B 비교: Qwen3-Coder 30B A3B<br/>(HAL 정확도로 평가 후 채택)"]:::llm
+        S3LLM["💡 Glue 생성 LLM<br/>━━━━━━━━━━━━━<br/>Gemma 4 31B Dense (Q4_K_M)<br/>(Step 1과 동일 모델 단일 상주<br/>2026-06-10 모델 단일화)"]:::llm
 
-        GOLD["📚 Golden Modules RAG<br/>━━━━━━━━━━━━━<br/>dc_motor_pid · multi_axis_sync<br/>bldc_6step_hall · fdcan_motor_cmd<br/>(검증된 C/H 레퍼런스)"]:::rag
+        GOLD["📚 Golden Modules (5종)<br/>━━━━━━━━━━━━━<br/>foc_pmsm · dc_motor_pid<br/>bldc_6step_hall · fdcan_motor_cmd<br/>multi_axis_sync<br/>(검증된 C/H 레퍼런스)"]:::rag
 
         S3OUT["🔧 코드 적응 + 주입<br/>USER CODE BEGIN/END 사이<br/>(regen-friendly)"]:::output1
 
@@ -175,15 +175,15 @@ flowchart LR
 
 | 모델 | 역할 | 학습 / 소싱 | 메모리 |
 |---|---|---|---|
-| **Gemma 4 31B Dense** | Step 1 추론 백본 (페르소나 토론) | `ollama pull gemma4:31b`, Apache 2.0 / Phase-2: QLoRA on 사내 리뷰 + 합성 데이터 | ~20 GB (Q4_K_M) |
-| **Gemma 4 26B MoE** | Step 3 코드 생성 1차 | `ollama pull gemma4:26b`, active ~4B | ~22 GB (Q8) |
-| **Qwen3-Coder 30B A3B** | Step 3 A/B 후보 (HAL 정확도 비교) | HuggingFace, as-is | ~18 GB |
+| **Gemma 4 31B Dense** | Step 1 추론 백본 + **Step 3 glue 생성** (단일 모델) | `ollama pull gemma4:31b`, Apache 2.0 / Phase-2: QLoRA on 사내 리뷰 + 합성 데이터 | ~20 GB (Q4_K_M) |
+| ~~Gemma 4 26B MoE~~ | ~~Step 3 초안~~ → **2026-06-10 단일화로 제거** | 미사용 (Gemma 4 31B로 통일) | — |
+| **Qwen3-Coder 30B A3B** | Step 3 향후 A/B 후보 (glue 품질 이슈 시 검토) | HuggingFace, as-is | ~18 GB |
 | **BAAI/bge-m3** | Dense 임베딩 | 사전학습, 다국어 / Phase-2: STM32 어휘 contrastive fine-tune (선택) | <2 GB |
 | **BM25 (rank_bm25)** | Sparse retriever (TIM1_CH1N, PA8 같은 정확한 심볼 매칭) | 학습 없음, 인덱스만 | <1 GB |
 | **5 Personas (prompt)** | MCU·Motor·Power·Safety·Moderator | 별도 가중치 없음, Gemma 4 31B 위 프롬프트 엔지니어링 | 0 |
 | **Vision** | 회로도 이미지 → pinmap 추출 + 초기 분석 | Gemma 4 31B 멀티모달 (동일 인스턴스 재사용) | 포함 (31B와 공유) |
 
-**Co-residency 검증:** 31B + 26B = ~42 GB ≪ 128 GB 통합메모리 ✓
+**Co-residency 검증:** Gemma 4 31B 단일 ~20 GB ≪ 128 GB 통합메모리 ✓ (2026-06-10 단일화)
 
 ---
 

@@ -63,9 +63,9 @@ ls dataset/opensource/ODriveHardware/
 
 ```bash
 ollama list
-# gemma4:31b 와 gemma4:26b 가 없으면:
-ollama pull gemma4:31b          # Step 1 (~20GB, Q4_K_M, Dense)
-ollama pull gemma4:26b          # Step 3 (~22GB, Q8, MoE)
+# gemma4:31b 가 없으면:
+ollama pull gemma4:31b          # Step 1 + Step 3 공유 (~20GB, Q4_K_M, Dense)
+# ※ gemma4:26b 는 2026-06-10 단일화로 더 이상 필요 없음
 ```
 
 ### Step 2. X-CUBE-MCSDK 설치 → XML/알고리즘 수집
@@ -152,15 +152,14 @@ python scripts/scrape_st_forum.py --max-items 300
   [2-4] ZIP 패키징 → shutil 기반 구현
 ```
 
-### Step 3 구현 — 알고리즘 통합 에이전트
+### Step 3 — Spark 검증 (미완료)
 
 ```
-파일 위치: agent/step3_integration_agent.py (미작성)
-모델: gemma4:26b (Ollama, MoE)
-동작:
-  1. Golden Module RAG → 요구사항에 맞는 모듈 선택
-  2. USER CODE BEGIN/END 영역에 FOC 알고리즘 삽입
-  3. 완성 펌웨어 .zip 반환
+파일 위치: agent/step3_codegen_agent.py (✅ 구현 완료)
+모델: gemma4:31b (Ollama, Step 1과 동일 모델 단일 상주 — 2026-06-10 단일화)
+남은 작업:
+  - embed_and_index.py --chunks-dir dataset/chunks_code --collection stm32g4_code 실행
+  - 실제 CubeMX 프로젝트로 glue 생성·빌드성(arm-none-eabi-gcc) 확인
 ```
 
 ---

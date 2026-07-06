@@ -243,7 +243,7 @@ MotorDriveForge/
 │   ├── step1_review_agent.py       # Step 1: Vision + Rule Engine + RAG + LLM
 │   ├── step3_codegen_agent.py      # Step 3: 역할 매퍼 + Golden Module 선택 + glue 생성
 │   ├── pin_options/                # STM32 전 계열 핀 AF JSON (CubeMX DB 파생)
-│   └── pin_af_db.json / pin_io_structure.json
+│   └── pin_io_structure.json       # 핀 FT/TT (5V 내성) — 데이터시트 파생
 ├── backend/
 │   ├── main.py                     # FastAPI: /v1/review, /v1/chat, /v1/generate-*
 │   ├── requirements.txt
@@ -254,20 +254,26 @@ MotorDriveForge/
 │   ├── .streamlit/config.toml
 │   ├── requirements.txt
 │   └── Dockerfile
-├── golden_modules/                 # 검증된 STM32G4 HAL C/H (5종)
+├── golden_modules/                 # 검증된 STM32G4 HAL C/H (5종: foc_pmsm, dc_motor_pid, bldc_6step_hall, fdcan_motor_cmd, multi_axis_sync)
 ├── scripts/                        # 데이터 수집 & RAG 파이프라인
 │   ├── embed_and_index.py          # BGE-M3 → Qdrant 적재
 │   ├── parse_cubemx_db.py          # CubeMX DB → 핀 AF JSON
+│   ├── parse_cubemx_xml.py         # CubeMX XML → 핀 AF DB (폴백 포함)
 │   ├── parse_opensource_algorithms.py  # OSS 알고리즘 → Step3 RAG
 │   └── ...
 ├── dataset/
-│   ├── official_docs/              # ST 공식 PDF
+│   ├── official_docs/              # ST 공식 PDF (14건)
 │   ├── chunks/                     # 청킹 결과 JSONL (git에 포함)
 │   ├── bm25_index/                 # BM25 인덱스 (git에 포함)
-│   └── pin_af_db.json              # 핀 AF DB 폴백 (git에 포함)
+│   ├── pin_af_db.json              # 핀 AF DB 폴백 (git에 포함)
+│   └── parsed_text/                # PDF 파싱 중간 결과물
+├── tests/
+│   └── test_review_modes.py        # 단위 테스트 (pytest)
+├── doc/                            # 발표 자료 (PPT/HTML/MP4/PNG)
 ├── docker-compose.yml              # Ollama + Qdrant + Backend + Frontend
 ├── start.sh                        # ⭐ 통합 시작 스크립트
 ├── run_embed_docker.sh             # RAG 임베딩 (레거시, start.sh ingest 권장)
+├── SPARK_STARTUP.md                # DGX Spark 기동 절차 가이드
 ├── ARCHITECTURE.md
 ├── CLAUDE.md
 └── todo.md
