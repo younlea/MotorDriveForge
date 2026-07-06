@@ -131,6 +131,20 @@ python scripts/scrape_st_forum.py --max-items 300
 
 ## 🟠 미완료 코드 작업
 
+### Step 1 — 5 페르소나 + 모더레이터 (미구현)
+
+```
+현재: agent/step1_review_agent.py::_llm_validate() 단일 LLM 호출 1회
+      (system 프롬프트 1개, STM32 전문가 단일 역할, chunk_id 인용 없음)
+구현 필요:
+  - 4개 페르소나 프롬프트 분리 (MCU/Motor/Power/Safety)
+  - 모더레이터 통합 단계 추가
+  - 접근 방식 결정 필요:
+    a) 순차 5회 LLM 호출 (품질↑, 응답시간 5×)
+    b) 단일 호출 in-context 5-role (빠름, 현실적)
+  - chunk_id 인용 강제 패턴 추가
+```
+
 ### 오픈소스 → Golden Module 가공
 
 ```

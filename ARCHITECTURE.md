@@ -27,9 +27,9 @@ flowchart TD
 
         B["🔍 B · Hybrid RAG Retrieval<br/>━━━━━━━━━━━━━<br/>쿼리 = 프롬프트 + 핀/페리페럴 키워드<br/>+ Rule Engine 결과(에러/워닝)<br/>+ Vision 초기 분석 (보강)<br/>━━━━━━━━━━━━━<br/>BGE-M3 (dense) ⊕ BM25 (sparse)<br/>→ Qdrant Top-K 청크"]:::rag
 
-        C["🧠 C · LLM Persona Debate<br/>━━━━━━━━━━━━━<br/>입력 컨텍스트:<br/>• 사용자 프롬프트 + pinmap<br/>• Vision 초기 분석<br/>• Rule Engine 결과 (전체)<br/>• RAG Top-K 청크<br/>━━━━━━━━━━━━━<br/>Backbone: Gemma 4 31B Dense (Q4_K_M)"]:::llm
+        C["🧠 C · LLM 검증<br/>━━━━━━━━━━━━━<br/>입력 컨텍스트:<br/>• 사용자 프롬프트 + pinmap<br/>• Vision 초기 분석<br/>• Rule Engine 결과 (전체)<br/>• RAG Top-K 청크<br/>━━━━━━━━━━━━━<br/>Backbone: Gemma 4 31B Dense (Q4_K_M)<br/>⚠️ 현재: 단일 LLM 호출 (페르소나 미구현)"]:::llm
 
-        PERSONA["👥 5 Personas (in-context prompts)<br/>━━━━━━━━━━━━━<br/>① MCU/Periph  ② Motor Ctrl  ③ Power/EMI<br/>④ Safety/Failsafe  ⚖ Moderator<br/>━━━━━━━━━━━━━<br/>모든 주장은 chunk_id 인용 강제"]:::persona
+        PERSONA["👥 5 Personas (설계 목표, 미구현)<br/>━━━━━━━━━━━━━<br/>① MCU/Periph  ② Motor Ctrl  ③ Power/EMI<br/>④ Safety/Failsafe  ⚖ Moderator<br/>━━━━━━━━━━━━━<br/>chunk_id 인용 강제 (미구현)"]:::persona
 
         REPORT["📋 Review Report (JSON)<br/>errors[] · warnings[] · suggestions[]<br/>+ vision_analysis (이미지 분석)<br/>+ evidence[chunk_id, source, quote]<br/>+ 자연어 설명 (신입용)"]:::output1
     end

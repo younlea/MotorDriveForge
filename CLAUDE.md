@@ -29,7 +29,7 @@ STM32G4 모터 드라이버 회로를 검토하고, 통과 시 CubeMX로 펌웨�
 ### 2. RAG는 LLM의 입력을 보강하는 용도
 - RAG가 단독으로 답을 만들지 않음
 - Hybrid RAG(BGE-M3 + BM25) 결과는 **반드시 LLM 컨텍스트로 들어감**
-- LLM의 모든 주장은 `chunk_id` 인용 강제 (모더레이터가 검증)
+- LLM의 모든 주장은 `chunk_id` 인용 강제 (모더레이터가 검증) — ⚠️ chunk_id 인용·모더레이터 모두 미구현
 
 ### 3. Step 1 데이터 의존성 (중요)
 ```
@@ -159,6 +159,9 @@ co-residency: Gemma 4 31B(~20GB) 단일 < 128 GB ✓ (별도 코더모델 미상
 
 ## 5 페르소나 시스템 프롬프트 가이드
 
+> ⚠️ **미구현**: 현재 `agent/step1_review_agent.py::_llm_validate()`는 단일 LLM 호출 1회.
+> 아래는 설계 목표. `todo.md` "🟠 미완료 코드 작업" 참조.
+
 각 페르소나는 자기 도메인의 관점에서만 발언. 모더레이터가 통합.
 
 1. **MCU/Periph Expert** — 핀 AF, 타이머/DMA/ADC 충돌, 클럭 트리, errata
@@ -167,7 +170,7 @@ co-residency: Gemma 4 31B(~20GB) 단일 < 128 GB ✓ (별도 코더모델 미상
 4. **Safety/Failsafe Expert** — 비상정지, 와치독, OCP/OVP/UVLO, FDCAN 끊김 대응
 5. **Moderator** — 충돌 의견 조정, 근거 없는 발언 기각, 최종 보고서 합의
 
-**중요**: 각 페르소나 발언에 `chunk_id` 인용 강제. 모더레이터가 검증.
+**설계 목표**: 각 페르소나 발언에 `chunk_id` 인용 강제. 모더레이터가 검증.
 
 ---
 
